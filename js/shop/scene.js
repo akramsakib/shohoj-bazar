@@ -106,8 +106,8 @@ export class ShopScene {
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     this.renderer.setSize(window.innerWidth, window.innerHeight);
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
-    this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    this.renderer.toneMappingExposure = 0.78;
+    this.renderer.toneMapping = THREE.NeutralToneMapping || THREE.ACESFilmicToneMapping;
+    this.renderer.toneMappingExposure = 0.92;
     // soft shadows are what separate a render from a shop that looks photographed
     this.renderer.shadowMap.enabled = true;
     this.renderer.shadowMap.type = THREE.PCFShadowMap;
@@ -138,7 +138,7 @@ export class ShopScene {
     this.scene.background = new THREE.Color('#171a17');
     this.scene.fog = new THREE.FogExp2('#e8dcc4', 0.014);
 
-    this.scene.add(new THREE.HemisphereLight(0xfff2dd, 0x6f6a5c, 0.30));
+    this.scene.add(new THREE.HemisphereLight(0xfff2dd, 0x6f6a5c, 0.22));
 
     // key light with shadows; its shadow camera follows the shopper each frame
     const key = new THREE.DirectionalLight(0xfff2dd, 1.15);
@@ -202,9 +202,9 @@ export class ShopScene {
     // bloom on the ceiling panels and speculars — this is what makes it read as a camera
     const bloom = new UnrealBloomPass(
       new THREE.Vector2(window.innerWidth, window.innerHeight),
-      this.tier === 'high' ? 0.34 : 0.26,   // strength
+      this.tier === 'high' ? 0.16 : 0.13,   // strength
       0.7,                                   // radius
-      0.82                                   // threshold: only really bright things glow
+      0.94                                   // threshold: only really bright things glow
     );
     this.bloom = bloom;
     this.composer.addPass(bloom);
@@ -218,7 +218,7 @@ export class ShopScene {
         uTime: { value: 0 },
         uVignette: { value: 0.16 },
         uGrain: { value: 0.018 },
-        uLift: { value: new THREE.Vector3(0.004, 0.002, 0.0) },
+        uLift: { value: new THREE.Vector3(0.0, 0.0, 0.0) },
       },
       vertexShader: `varying vec2 vUv; void main(){ vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0); }`,
       fragmentShader: `
@@ -485,8 +485,8 @@ export class ShopScene {
       new THREE.PlaneGeometry(9.5, 46),
       new THREE.MeshPhysicalMaterial({
         ...pbrSet('terrazzo_tiles', [2.2, 10]),
-        roughness: 1.0, metalness: 0.02,
-        clearcoat: 0.55, clearcoatRoughness: 0.30, color: '#ffffff', envMapIntensity: 0.8,
+        roughness: 0.72, metalness: 0.02,
+        clearcoat: 0.85, clearcoatRoughness: 0.12, color: '#ffffff', envMapIntensity: 1.35,
       })
     );
     floor.rotation.x = -Math.PI / 2;
@@ -597,7 +597,7 @@ export class ShopScene {
 
     const shelfMat = new THREE.MeshStandardMaterial({ color: '#fbf8f1', roughness: 0.75 });
     const boardMat = new THREE.MeshStandardMaterial({ color: '#e6e0d2', roughness: 0.7 });
-    const backMat = new THREE.MeshStandardMaterial({ color: '#b9c1b6', roughness: 0.94 });
+    const backMat = new THREE.MeshStandardMaterial({ color: '#aab3a8', roughness: 0.94 });
 
     const BAY_W = 6.2;
     const SHELF_X = 2.0;
@@ -614,22 +614,46 @@ export class ShopScene {
     for (const side of [-1, 1]) {
       for (let bay = 0; bay < bays; bay++) {
         const bayCentre = AISLE_START_Z - BAY_W / 2 - bay * BAY_W;
+        const section = (dept.sections || []).find((sec) => (sec.bays || []).includes(bay));
         const group = new THREE.Group();
         group.position.set(side * SHELF_X, 0, bayCentre);
 
-        const back = new THREE.Mesh(new THREE.BoxGeometry(0.08, LEVELS * LEVEL_H + BASE_Y + 0.12, BAY_W), backMat);
+        const secColour = section ? (section.accent || dept.accent) : (dept.accent || '#0d6138');
+
+        // solid brand-coloured back panel: the single strongest "this is a real shop" cue
+        const back = new THREE.Mesh(
+          new THREE.BoxGeometry(0.08, LEVELS * LEVEL_H + BASE_Y + 0.12, BAY_W),
+          new THREE.MeshStandardMaterial({ color: secColour, roughness: 0.55, metalness: 0.05, envMapIntensity: 1.1 })
+        );
         back.position.set(side * 0.3, (LEVELS * LEVEL_H + BASE_Y) / 2, 0);
+        back.receiveShadow = true;
         group.add(back);
 
+        // a soft fill inside each shelf bay so packs never sit in a dead shadow
+        const fill = new THREE.PointLight(0xfff4e0, 0.85, 2.0, 2);
+        fill.position.set(side * (SHELF_X - 0.75), LEVELS * LEVEL_H * 0.55, bayCentre);
+        this.scene.add(fill);
+
+        // coloured plinth running along the floor, like a real gondola base
+        const plinth = new THREE.Mesh(
+          new THREE.BoxGeometry(0.62, BASE_Y + 0.10, BAY_W),
+          new THREE.MeshStandardMaterial({ color: secColour, roughness: 0.5, metalness: 0.08 })
+        );
+        plinth.position.set(0, (BASE_Y + 0.10) / 2, 0);
+        plinth.castShadow = true;
+        plinth.receiveShadow = true;
+        group.add(plinth);
+
         [-BAY_W / 2, BAY_W / 2].forEach((z) => {
-          const up = new THREE.Mesh(new THREE.BoxGeometry(0.56, LEVELS * LEVEL_H + BASE_Y + 0.5, 0.07), shelfMat);
+          const up = new THREE.Mesh(
+            new THREE.BoxGeometry(0.56, LEVELS * LEVEL_H + BASE_Y + 0.5, 0.07),
+            new THREE.MeshStandardMaterial({ color: secColour, roughness: 0.5, metalness: 0.06, envMapIntensity: 1.1 })
+          );
           up.position.set(0, (LEVELS * LEVEL_H + BASE_Y + 0.5) / 2, z);
           up.castShadow = true;
           up.receiveShadow = true;
           group.add(up);
         });
-
-        const section = (dept.sections || []).find((sec) => (sec.bays || []).includes(bay));
 
         for (let i = 0; i <= LEVELS; i++) {
           const y = BASE_Y + i * LEVEL_H;
@@ -705,6 +729,115 @@ export class ShopScene {
     ceil.position.set(0, 3.5, AISLE_START_Z - totalLen / 2 + 0.3);
     aisle.add(ceil);
 
+    /* ---- ceiling services: real shops are never a blank plane ---- */
+    const ductMat = new THREE.MeshStandardMaterial({ color: '#b9bdb6', roughness: 0.62, metalness: 0.45 });
+    const pipeMat = new THREE.MeshStandardMaterial({ color: '#8f9490', roughness: 0.45, metalness: 0.7 });
+    [-1.05, 1.05].forEach((x) => {
+      const duct = new THREE.Mesh(new THREE.CylinderGeometry(0.16, 0.16, totalLen + 1.0, 14), ductMat);
+      duct.rotation.x = Math.PI / 2;
+      duct.position.set(x, 3.22, AISLE_START_Z - totalLen / 2 + 0.3);
+      aisle.add(duct);
+    });
+    // actual light sources down the run — the visible tubes above are just trim
+    for (let i = 0; i * 3.4 < totalLen + 1; i++) {
+      const lamp = new THREE.PointLight(0xfff0d2, 3.6, 12, 2);
+      lamp.position.set(0, 3.05, AISLE_START_Z - 1.7 - i * 3.4);
+      lamp.userData.baseIntensity = 3.6;
+      aisle.add(lamp);
+      if (i % 2 === 0) {
+        const side1 = new THREE.PointLight(0xfff3da, 2.0, 4.4, 2);
+        side1.position.set(0, 2.9, AISLE_START_Z - 2.6 - i * 3.4);
+        side1.userData.baseIntensity = 2.0;
+        aisle.add(side1);
+      }
+    }
+
+    // sprinkler main + droppers
+    const main = new THREE.Mesh(new THREE.CylinderGeometry(0.035, 0.035, totalLen + 1.0, 10), pipeMat);
+    main.rotation.x = Math.PI / 2;
+    main.position.set(0, 3.30, AISLE_START_Z - totalLen / 2 + 0.3);
+    aisle.add(main);
+    // hanging linear fixtures: what actually lights a hypermarket aisle
+    const tubeMat = new THREE.MeshBasicMaterial({ color: '#fffdf4' });
+    const housingMat = new THREE.MeshStandardMaterial({ color: '#d9dbd4', roughness: 0.5, metalness: 0.4 });
+    for (let i = 0; i * 2.6 < totalLen; i++) {
+      const z = AISLE_START_Z - 1.3 - i * 2.6;
+      const housing = new THREE.Mesh(new THREE.BoxGeometry(0.30, 0.10, 1.9), housingMat);
+      housing.position.set(0, 3.30, z);
+      aisle.add(housing);
+      const tube = new THREE.Mesh(new THREE.PlaneGeometry(0.20, 1.78), tubeMat);
+      tube.rotation.x = Math.PI / 2;
+      tube.position.set(0, 3.24, z);
+      aisle.add(tube);
+      [-1, 1].forEach((sx) => {
+        const wire = new THREE.Mesh(new THREE.CylinderGeometry(0.008, 0.008, 0.16, 4), pipeMat);
+        wire.position.set(sx * 0.12, 3.42, z);
+        aisle.add(wire);
+      });
+      if (i % 2 === 0) {
+        const spr = new THREE.Mesh(new THREE.ConeGeometry(0.045, 0.09, 8), pipeMat);
+        spr.rotation.x = Math.PI;
+        spr.position.set(0, 3.26, z + 1.3);
+        aisle.add(spr);
+      }
+    }
+
+    /* ---- overstock cartons on the gondola tops ---- */
+    const cartonTex = (() => {
+      const c = document.createElement('canvas');
+      c.width = 256; c.height = 192;
+      const g = c.getContext('2d');
+      g.fillStyle = '#c39a63';
+      g.fillRect(0, 0, 256, 192);
+      g.fillStyle = 'rgba(255,255,255,.14)';
+      for (let i = 0; i < 26; i++) g.fillRect(0, i * 8, 256, 1);
+      g.fillStyle = '#7a5230';
+      g.fillRect(0, 66, 256, 6);
+      g.fillRect(0, 120, 256, 6);
+      g.fillStyle = '#2b2118';
+      g.fillRect(26, 84, 88, 26);
+      g.fillStyle = '#f4ead8';
+      g.fillRect(122, 84, 108, 18);
+      g.fillStyle = '#2b2118';
+      g.fillRect(20, 138, 210, 8);
+      g.fillRect(20, 152, 150, 6);
+      const t = new THREE.CanvasTexture(c);
+      t.colorSpace = THREE.SRGBColorSpace;
+      t.anisotropy = 4;
+      return t;
+    })();
+    const cartonMat = new THREE.MeshStandardMaterial({ map: cartonTex, roughness: 0.92, color: '#fff' });
+    const cartonBlank = new THREE.MeshStandardMaterial({ color: '#b78f5c', roughness: 0.94 });
+    const gondolaTop = BASE_Y + LEVELS * LEVEL_H + 0.06;
+    (this.bayGroups || []).forEach((group) => {
+      const { side, bay } = group.userData;
+      const bayCentre = AISLE_START_Z - BAY_W / 2 - bay * BAY_W;
+      const count = 3 + Math.round(Math.abs(Math.sin(bay * 3.7 + side)) * 3);
+      for (let i = 0; i < count; i++) {
+        const w = 0.34 + ((i * 37) % 5) * 0.04;
+        const h = 0.26 + ((i * 53) % 4) * 0.05;
+        const d = 0.30 + ((i * 29) % 4) * 0.045;
+        const box = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), i % 3 === 0 ? cartonBlank : cartonMat);
+        const col = i % 2;
+        const stackH = i > 3 ? h * 0.94 : 0;
+        box.position.set(
+          side * (SHELF_X - 0.34 - col * 0.13),
+          gondolaTop + h / 2 + stackH,
+          bayCentre + (i - count / 2) * 0.58 + Math.sin(i * 2.1) * 0.05
+        );
+        box.rotation.y = Math.sin(bay * 5 + i * 1.7) * 0.09;
+        box.castShadow = true;
+        aisle.add(box);
+      }
+      // a low header board capping the gondola, like the colour-coded run ends
+      const cap = new THREE.Mesh(
+        new THREE.BoxGeometry(0.06, 0.22, BAY_W - 0.2),
+        new THREE.MeshStandardMaterial({ color: group.userData.section?.accent || dept.accent || '#0d6138', roughness: 0.55 })
+      );
+      cap.position.set(side * (SHELF_X - 0.02), BASE_Y + LEVELS * LEVEL_H + 0.13, bayCentre);
+      aisle.add(cap);
+    });
+
     /* ---- stock the shelves ---- */
     const facings = this.portrait ? dept.layout.facings.mobile : dept.layout.facings.desktop;
     const bySection = {};
@@ -772,18 +905,35 @@ export class ShopScene {
         ...pbrSet('brown_planks_05', [1, 1]), color: '#c9a06f', roughness: 1.0, metalness: 0,
       });
       const pallet = new THREE.Group();
-      for (let i = 0; i < 5; i++) {
-        const slat = new THREE.Mesh(new THREE.BoxGeometry(0.95, 0.022, 0.20), woodMat);
-        slat.position.set(0, 0.105, -0.68 + i * 0.34);
+      for (let i = 0; i < 7; i++) {
+        const slat = new THREE.Mesh(new THREE.BoxGeometry(0.86, 0.024, 0.17), woodMat);
+        slat.position.set(0, 0.098, -0.66 + i * 0.22);
         slat.castShadow = true;
         pallet.add(slat);
       }
-      [-0.4, 0, 0.4].forEach((x) => {
-        const beam = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.09, 1.7), woodMat);
-        beam.position.set(x, 0.05, 0);
+      [-0.34, 0, 0.34].forEach((x) => {
+        const beam = new THREE.Mesh(new THREE.BoxGeometry(0.09, 0.075, 1.56), woodMat);
+        beam.position.set(x, 0.045, 0);
         pallet.add(beam);
       });
-      pallet.position.set(1.55, 0, AISLE_START_Z - 2.6);
+      // saturated promo island, like the yellow block in every hypermarket
+      const island = new THREE.Mesh(
+        new THREE.BoxGeometry(1.25, 0.055, 2.0),
+        new THREE.MeshStandardMaterial({ color: '#f2b705', roughness: 0.42, metalness: 0.05, envMapIntensity: 1.2 })
+      );
+      island.position.set(1.55, 0.026, AISLE_START_Z - 3.4);
+      island.receiveShadow = true;
+      aisle.add(island);
+
+      const islandSign = new THREE.Mesh(
+        new THREE.PlaneGeometry(1.15, 0.34),
+        new THREE.MeshBasicMaterial({ map: signTexture('25 KG SACKS', '২৫ কেজি বস্তা', '#c1121f') })
+      );
+      islandSign.rotation.y = -Math.PI / 2;
+      islandSign.position.set(0.90, 0.95, AISLE_START_Z - 3.4);
+      aisle.add(islandSign);
+
+      pallet.position.set(1.55, 0.055, AISLE_START_Z - 3.4);
       aisle.add(pallet);
 
       (dept.bulk || []).forEach((entry, i) => {
@@ -803,7 +953,7 @@ export class ShopScene {
           m.userData.home = m.position.clone();
           m.userData.homeRot = m.rotation.clone();
         }
-        stack.position.set(1.52, 0, AISLE_START_Z - 3.6 - i * 0.62);
+        stack.position.set(1.52, 0.11, AISLE_START_Z - 3.05 - i * 0.58);
         aisle.add(stack);
         this.bulkGroups.push(stack);
       });
@@ -897,22 +1047,60 @@ export class ShopScene {
       aisle.add(decal);
     });
 
-    /* ---- hanging aisle signs above the gondolas ---- */
-    (dept.sections || []).forEach((sec) => {
-      const lastBay = (sec.bays || [0])[(sec.bays || [0]).length - 1];
-      const z = AISLE_START_Z - (lastBay + 1) * BAY_W + 0.35;
+    /* ---- numbered aisle pendants: big numerals, readable from the entrance ---- */
+    const wireMat = new THREE.MeshStandardMaterial({ color: '#9aa39c', roughness: 0.5, metalness: 0.4 });
+    (dept.sections || []).forEach((sec, i) => {
+      const bays = sec.bays || [0];
+      const lastBay = bays[bays.length - 1];
+      const z = AISLE_START_Z - (lastBay + 1) * BAY_W + 0.5;
       if (z > AISLE_START_Z - 4.2) return;   // never hang one in your face at the mouth
-      const board = new THREE.Mesh(
-        new THREE.PlaneGeometry(1.55, 0.40),
-        new THREE.MeshBasicMaterial({ map: signTexture(sec.name.toUpperCase(), sec.nameBn, sec.accent || '#0d6138') })
-      );
-      board.position.set(0, 2.52, z);
-      aisle.add(board);
 
-      const wireMat = new THREE.MeshStandardMaterial({ color: '#9aa39c', roughness: 0.5, metalness: 0.4 });
-      [-0.6, 0.6].forEach((x) => {
-        const wire = new THREE.Mesh(new THREE.CylinderGeometry(0.005, 0.005, 0.76, 5), wireMat);
-        wire.position.set(x, 3.12, z);
+      const num = String(i + 1).padStart(2, '0');
+      const W = 1.75, H = 0.84;
+      const c = document.createElement('canvas');
+      c.width = 512; c.height = 244;
+      const ctx = c.getContext('2d');
+      const col = sec.accent || '#0d6138';
+      ctx.fillStyle = col; ctx.fillRect(0, 0, 512, 244);
+      ctx.fillStyle = 'rgba(255,255,255,.14)'; ctx.fillRect(0, 0, 512, 44);
+      ctx.fillStyle = '#fff';
+      ctx.textBaseline = 'middle';
+      ctx.textAlign = 'center';
+      ctx.font = '900 118px Inter, Arial, sans-serif';
+      ctx.fillText(num, 122, 118);
+      ctx.textAlign = 'left';
+      const label = sec.name.toUpperCase();
+      let lsz = 46;
+      ctx.font = `800 ${lsz}px Inter, Arial, sans-serif`;
+      while (ctx.measureText(label).width > 250 && lsz > 22) {
+        lsz -= 2;
+        ctx.font = `800 ${lsz}px Inter, Arial, sans-serif`;
+      }
+      ctx.fillText(label, 232, 96);
+      let bsz = 32;
+      ctx.font = `600 ${bsz}px "Noto Sans Bengali","Hind Siliguri",sans-serif`;
+      while (ctx.measureText(sec.nameBn).width > 250 && bsz > 18) {
+        bsz -= 2;
+        ctx.font = `600 ${bsz}px "Noto Sans Bengali","Hind Siliguri",sans-serif`;
+      }
+      ctx.fillStyle = 'rgba(255,255,255,.86)';
+      ctx.fillText(sec.nameBn, 232, 148);
+      const tex = new THREE.CanvasTexture(c);
+      tex.colorSpace = THREE.SRGBColorSpace;
+
+      const board = new THREE.Mesh(
+        new THREE.BoxGeometry(W, H, 0.05),
+        [
+          new THREE.MeshBasicMaterial({ color: col }), new THREE.MeshBasicMaterial({ color: col }),
+          new THREE.MeshBasicMaterial({ color: col }), new THREE.MeshBasicMaterial({ color: col }),
+          new THREE.MeshBasicMaterial({ map: tex }), new THREE.MeshBasicMaterial({ map: tex }),
+        ]
+      );
+      board.position.set(0, 2.66, z);
+      aisle.add(board);
+      [-0.66, 0.66].forEach((x) => {
+        const wire = new THREE.Mesh(new THREE.CylinderGeometry(0.005, 0.005, 0.52, 5), wireMat);
+        wire.position.set(x, 3.34, z);
         aisle.add(wire);
       });
     });
@@ -940,49 +1128,83 @@ export class ShopScene {
     const g = new THREE.Group();
     g.name = 'trolley';
     // light aluminium, not mirror metal — the shop has no environment map to reflect
-    const chrome = new THREE.MeshStandardMaterial({ color: '#dfe3e6', roughness: 0.42, metalness: 0.25 });
-    const wire = new THREE.MeshStandardMaterial({ color: '#e6e9eb', roughness: 0.5, metalness: 0.18 });
+    const chrome = new THREE.MeshStandardMaterial({ color: '#9fa8ad', roughness: 0.55, metalness: 0.2 });
+    const wire = new THREE.MeshStandardMaterial({ color: '#a8b0b4', roughness: 0.6, metalness: 0.15 });
 
-    const W = 0.52, L = 0.78, RIM = 1.05, FLOOR = 0.50;
+    const W = 0.54, L = 0.80, RIM = 1.02, FLOOR = 0.46;
 
-    // basket floor
-    const floor = new THREE.Mesh(new THREE.BoxGeometry(W, 0.02, L), wire);
-    floor.position.set(0, FLOOR, -0.06);
+    // real super-shop baskets are open wire, so a lattice with cut-outs reads right
+    const lattice = (() => {
+      const c = document.createElement('canvas');
+      c.width = 128; c.height = 128;
+      const g2 = c.getContext('2d');
+      g2.clearRect(0, 0, 128, 128);
+      g2.fillStyle = '#b7c0c4';
+      for (let k = 2; k < 128; k += 15) {
+        g2.fillRect(0, k, 128, 3.6);
+        g2.fillRect(k, 0, 3.6, 128);
+      }
+      const t = new THREE.CanvasTexture(c);
+      t.colorSpace = THREE.SRGBColorSpace;
+      t.wrapS = t.wrapT = THREE.RepeatWrapping;
+      t.repeat.set(4, 4);
+      t.anisotropy = 4;
+      return t;
+    })();
+    const meshMat = new THREE.MeshStandardMaterial({
+      map: lattice, alphaMap: lattice, transparent: true, alphaTest: 0.35,
+      side: THREE.DoubleSide, roughness: 0.6, metalness: 0.15, color: '#c2c9cc',
+    });
+
+    // basket floor (solid, as on the real thing)
+    const floor = new THREE.Mesh(new THREE.BoxGeometry(W, 0.018, L),
+      new THREE.MeshStandardMaterial({ color: '#7b8488', roughness: 0.7, metalness: 0.15 }));
+    floor.position.set(0, FLOOR, -0.02);
     g.add(floor);
 
-    // four basket walls, low enough to see over
-    const front = new THREE.Mesh(new THREE.BoxGeometry(W, RIM - FLOOR, 0.02), wire);
-    front.position.set(0, (RIM + FLOOR) / 2, -0.06 - L / 2);
-    g.add(front);
-    [-1, 1].forEach((sx) => {
-      const side = new THREE.Mesh(new THREE.BoxGeometry(0.02, RIM - FLOOR, L), wire);
-      side.position.set(sx * W / 2, (RIM + FLOOR) / 2, -0.06);
-      g.add(side);
-    });
-    const backWall = new THREE.Mesh(new THREE.BoxGeometry(W, (RIM - FLOOR) * 0.55, 0.02), wire);
-    backWall.position.set(0, FLOOR + (RIM - FLOOR) * 0.28, -0.06 + L / 2);
-    g.add(backWall);
+    // four lattice walls
+    const wall = (w, h, x, y, z, ry) => {
+      const m = new THREE.Mesh(new THREE.PlaneGeometry(w, h), meshMat);
+      m.position.set(x, y, z);
+      m.rotation.y = ry;
+      g.add(m);
+    };
+    const H = RIM - FLOOR;
+    wall(W, H, 0, FLOOR + H / 2, -0.02 - L / 2, 0);
+    wall(W, H * 0.72, 0, FLOOR + H * 0.36, -0.02 + L / 2, 0);
+    wall(L, H, -W / 2, FLOOR + H / 2, -0.02, Math.PI / 2);
+    wall(L, H, W / 2, FLOOR + H / 2, -0.02, Math.PI / 2);
 
-    // rim rail
+    // rim rail, welded all the way round
     const railTop = (w, d, x, z) => {
-      const r = new THREE.Mesh(new THREE.BoxGeometry(w, 0.025, d), chrome);
+      const r = new THREE.Mesh(new THREE.BoxGeometry(w, 0.026, d), chrome);
       r.position.set(x, RIM, z);
       g.add(r);
     };
-    railTop(W + 0.02, 0.025, 0, -0.06 - L / 2);
-    railTop(W + 0.02, 0.025, 0, -0.06 + L / 2);
-    railTop(0.025, L, -W / 2, -0.06);
-    railTop(0.025, L, W / 2, -0.06);
+    railTop(W + 0.03, 0.026, 0, -0.02 - L / 2);
+    railTop(W + 0.03, 0.026, 0, -0.02 + L / 2);
+    railTop(0.026, L, -W / 2, -0.02);
+    railTop(0.026, L, W / 2, -0.02);
 
-    // push handle, angled back toward the shopper
-    const bar = new THREE.Mesh(new THREE.BoxGeometry(W + 0.06, 0.032, 0.032), chrome);
-    bar.position.set(0, 1.16, 0.44);
-    g.add(bar);
+    // push handle: two rails and a fat grip, the way you actually hold a trolley
+    [-0.10, 0.10].forEach((dz) => {
+      const bar = new THREE.Mesh(new THREE.BoxGeometry(W + 0.04, 0.026, 0.026), chrome);
+      bar.position.set(0, 1.10, 0.40 + dz);
+      g.add(bar);
+    });
     [-1, 1].forEach((sx) => {
-      const post = new THREE.Mesh(new THREE.BoxGeometry(0.03, 0.24, 0.03), chrome);
-      post.position.set(sx * (W / 2 - 0.01), 1.03, 0.44);
-      post.rotation.x = 0.18;
-      g.add(post);
+      [-0.10, 0.10].forEach((dz) => {
+        const post = new THREE.Mesh(new THREE.BoxGeometry(0.026, 0.20, 0.026), chrome);
+        post.position.set(sx * (W / 2 - 0.005), 1.00, 0.40 + dz);
+        g.add(post);
+      });
+      const link = new THREE.Mesh(new THREE.BoxGeometry(0.026, 0.026, 0.22), chrome);
+      link.position.set(sx * (W / 2 - 0.005), 1.10, 0.45);
+      g.add(link);
+      const drop = new THREE.Mesh(new THREE.BoxGeometry(0.024, 0.20, 0.024), chrome);
+      drop.position.set(sx * (W / 2 - 0.005), 0.90, 0.52);
+      drop.rotation.x = -0.22;
+      g.add(drop);
     });
 
     // wheels
@@ -992,25 +1214,27 @@ export class ShopScene {
         new THREE.MeshStandardMaterial({ color: '#2b2f31', roughness: 0.8 })
       );
       wheel.rotation.z = Math.PI / 2;
-      wheel.position.set(sx * (W / 2 - 0.04), 0.045, -0.06 + sz * (L / 2 - 0.05));
+      wheel.position.set(sx * (W / 2 - 0.04), 0.045, -0.02 + sz * (L / 2 - 0.05));
       g.add(wheel);
     });
 
-    // red grip on the handle + a shop plate on the basket front
+    // the shop's own grip colour, right under your hands
     const grip = new THREE.Mesh(
-      new THREE.BoxGeometry(W * 0.60, 0.030, 0.036),
-      new THREE.MeshStandardMaterial({ color: '#0d6138', roughness: 0.55 })
+      new THREE.CylinderGeometry(0.024, 0.024, W * 0.78, 14),
+      new THREE.MeshStandardMaterial({ color: '#0d6138', roughness: 0.34, metalness: 0.05 })
     );
-    grip.position.set(0, 1.16, 0.444);
+    grip.rotation.z = Math.PI / 2;
+    grip.position.set(0, 1.10, 0.40);
     g.add(grip);
-
-    const plate = new THREE.Mesh(
-      new THREE.PlaneGeometry(0.30, 0.075),
-      new THREE.MeshBasicMaterial({ map: signTexture('SHOHOJ', 'সহজ', '#0d6138') })
-    );
-    plate.position.set(0, 0.86, -0.06 - L / 2 - 0.012);
-    plate.rotation.y = Math.PI;
-    g.add(plate);
+    [-1, 1].forEach((sx) => {
+      const cap = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.028, 0.028, 0.05, 12),
+        new THREE.MeshStandardMaterial({ color: '#1f2427', roughness: 0.6 })
+      );
+      cap.rotation.z = Math.PI / 2;
+      cap.position.set(sx * W * 0.40, 1.10, 0.40);
+      g.add(cap);
+    });
 
     // items dropped into the basket live here
     this.basket = new THREE.Group();
@@ -1061,10 +1285,13 @@ export class ShopScene {
     while (d < -Math.PI) d += Math.PI * 2;
     this.trolleyHeading += THREE.MathUtils.clamp(d, -1.6 * dt, 1.6 * dt);
     const body = new THREE.Vector3(Math.sin(this.trolleyHeading), 0, Math.cos(this.trolleyHeading));
-    const target = cam.position.clone().addScaledVector(body, this.portrait ? 1.15 : 0.74);
+    const target = cam.position.clone().addScaledVector(body, this.portrait ? 1.45 : 1.72);
     target.y = 0;
-    const k = 1 - Math.pow(0.0001, Math.min(dt, 0.05));
-    this.trolley.position.lerp(target, k);
+    // the trolley is in your hands: it must never lag behind the camera
+    const k = Math.min(1, dt * 16);
+    this.trolley.position.x += (target.x - this.trolley.position.x) * k;
+    this.trolley.position.z += (target.z - this.trolley.position.z) * k;
+    if (this.trolley.position.distanceTo(target) > 1.6) this.trolley.position.copy(target);
     // face the same way the shopper faces
     this.trolley.rotation.y = this.trolleyHeading + Math.PI;
     // a little rolling bounce while walking
@@ -1086,6 +1313,11 @@ export class ShopScene {
     const v = this.vantages()[name];
     if (name !== 'aisle' && this.mode === 'aisle') this.camera.position.x = 0;
     this.mode = name;
+    if (name === 'aisle') {
+      // you are pushing a trolley the moment you step into the run
+      this.takeTrolley();
+      if (this.pitch > -0.02 && this.pitch < 0.02) this.pitch = -0.075;
+    }
     this.lookTarget = v.look.clone();
     if (instant) {
       this.camera.position.copy(v.pos);

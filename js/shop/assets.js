@@ -125,13 +125,13 @@ function drawLabel(product, ctx, W, H) {
 
   // full-width colour header: the strongest read at shelf distance
   ctx.fillStyle = a;
-  ctx.fillRect(0, H * 0.095, W, H * 0.27);
+  ctx.fillRect(0, H * 0.095, W, H * 0.34);
   const hg = ctx.createLinearGradient(0, H * 0.095, 0, H * 0.365);
-  hg.addColorStop(0, 'rgba(255,255,255,.22)');
+  hg.addColorStop(0, 'rgba(255,255,255,.16)');
   hg.addColorStop(0.5, 'rgba(255,255,255,.02)');
-  hg.addColorStop(1, 'rgba(0,0,0,.22)');
+  hg.addColorStop(1, 'rgba(0,0,0,.24)');
   ctx.fillStyle = hg;
-  ctx.fillRect(0, H * 0.095, W, H * 0.27);
+  ctx.fillRect(0, H * 0.095, W, H * 0.34);
 
   // brand cartouche
   const bw = W * 0.62, bh = H * 0.115, bx = (W - bw) / 2, by = H * 0.175;
@@ -157,15 +157,34 @@ function drawLabel(product, ctx, W, H) {
 
   // product name, English then Bangla
   ctx.textBaseline = 'middle';
-  ctx.fillStyle = a;
+  // brand colour block already drawn; names sit inside it in white
+  ctx.fillStyle = '#fff';
   const nameEn = product.name.toUpperCase();
-  let nsz = fitFont(ctx, nameEn, W * 0.86, H * 0.082, 800);
-  ctx.font = `800 ${nsz}px Inter, Arial, sans-serif`;
-  ctx.fillText(nameEn, W / 2, H * 0.355);
+  const maxW = W * 0.80;
+  let nsz = fitFont(ctx, nameEn, maxW, H * 0.082, 800);
+  if (nsz <= H * 0.060 && nameEn.includes(' ')) {
+    // long names go on two lines, the way a real pack sets them
+    const words = nameEn.split(' ');
+    let best = 1, bestSize = 0;
+    for (let cut = 1; cut < words.length; cut++) {
+      const l1 = words.slice(0, cut).join(' ');
+      const l2 = words.slice(cut).join(' ');
+      const size = Math.min(fitFont(ctx, l1, maxW, H * 0.082, 800), fitFont(ctx, l2, maxW, H * 0.082, 800));
+      if (size > bestSize) { bestSize = size; best = cut; }
+    }
+    const l1 = words.slice(0, best).join(' ');
+    const l2 = words.slice(best).join(' ');
+    ctx.font = `800 ${bestSize}px Inter, Arial, sans-serif`;
+    ctx.fillText(l1, W / 2, H * 0.300);
+    ctx.fillText(l2, W / 2, H * 0.300 + bestSize * 1.06);
+  } else {
+    ctx.font = `800 ${nsz}px Inter, Arial, sans-serif`;
+    ctx.fillText(nameEn, W / 2, H * 0.325);
+  }
 
-  ctx.fillStyle = 'rgba(20,30,20,.86)';
-  ctx.font = `600 ${H * 0.062}px "Noto Sans Bengali", "Hind Siliguri", "Nirmala UI", sans-serif`;
-  ctx.fillText(product.bn, W / 2, H * 0.425);
+  ctx.fillStyle = 'rgba(255,255,255,.92)';
+  ctx.font = `600 ${H * 0.058}px "Noto Sans Bengali", "Hind Siliguri", "Nirmala UI", sans-serif`;
+  ctx.fillText(product.bn, W / 2, H * 0.395);
 
   // colour footer band, mirroring the header
   ctx.fillStyle = a;
@@ -173,7 +192,7 @@ function drawLabel(product, ctx, W, H) {
 
   // the window: an oval cut-out with real grain behind glass
   if (product.shape === 'sack' || product.shape === 'pouch' || product.shape === 'box') {
-    drawGrainWindow(ctx, product, W * 0.17, H * 0.465, W * 0.66, H * 0.30, true);
+    drawGrainWindow(ctx, product, W * 0.16, H * 0.475, W * 0.68, H * 0.28, true);
   }
 
   // weight badge
