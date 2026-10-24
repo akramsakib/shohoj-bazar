@@ -2,6 +2,12 @@
    One continuous WebGL scene. Camera "walks"; nothing reloads. */
 
 import * as THREE from '../../vendor/three.module.js';
+import { EffectComposer } from '../../vendor/jsm/postprocessing/EffectComposer.js';
+import { RenderPass } from '../../vendor/jsm/postprocessing/RenderPass.js';
+import { GTAOPass } from '../../vendor/jsm/postprocessing/GTAOPass.js';
+import { UnrealBloomPass } from '../../vendor/jsm/postprocessing/UnrealBloomPass.js';
+import { ShaderPass } from '../../vendor/jsm/postprocessing/ShaderPass.js';
+import { OutputPass } from '../../vendor/jsm/postprocessing/OutputPass.js';
 import { buildProduct, priceTag, shelfTalker, ensureBackTexture, glowTexture } from './assets.js';
 
 const ease = (t) => (t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2);
@@ -59,6 +65,11 @@ function signTexture(text, sub, bg = '#0a4a2c', fg = '#ffffff') {
 
 export class ShopScene {
   constructor(canvas, department) {
+    // quality tier: phones get the cheap chain, desktops get AO + bloom
+    const small = Math.min(window.innerWidth, window.innerHeight) < 820;
+    const cores = navigator.hardwareConcurrency || 4;
+    const forced = new URLSearchParams(location.search).get('q');
+    this.tier = forced || (small || cores <= 4 ? 'low' : 'high');
     this.canvas = canvas;
     this.prevTime = performance.now();
     this.mode = 'street';
@@ -81,6 +92,7 @@ export class ShopScene {
     this.moveInput = { f: 0, s: 0 };   // joystick: forward, sideways
     this.lateral = 0;                  // how far you have stepped across the aisle
     this.setCameraVantage('street', true);
+    this.initPost();
     this.bindInput();
     this.animate();
   }
@@ -98,7 +110,7 @@ export class ShopScene {
     this.renderer.toneMappingExposure = 0.78;
     // soft shadows are what separate a render from a shop that looks photographed
     this.renderer.shadowMap.enabled = true;
-    this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    this.renderer.shadowMap.type = THREE.PCFShadowMap;
     this.renderer.shadowMap.autoUpdate = false;   // refreshed only when the shopper moves
 
     this.camera = new THREE.PerspectiveCamera(58, window.innerWidth / window.innerHeight, 0.05, 90);
@@ -159,6 +171,81 @@ export class ShopScene {
       const p = new THREE.PointLight(0xffe9cc, i === 0 ? 5.5 : 4.2, 11, 2);
       p.position.set(0, 2.95, z);
       this.scene.add(p);
+    });
+  }
+
+  /* --------------------------------------------------- post processing */
+  initPost() {
+    const size = new THREE.Vector2();
+    this.renderer.getSize(size);
+
+    const target = new THREE.WebGLRenderTarget(size.x, size.y, {
+      type: THREE.HalfFloatType, samples: 4,
+    });
+    this.composer = new EffectComposer(this.renderer, target);
+    this.composer.setPixelRatio(Math.min(window.devicePixelRatio, 1.75));
+    this.composer.setSize(window.innerWidth, window.innerHeight);
+
+    this.composer.addPass(new RenderPass(this.scene, this.camera));
+
+    if (this.tier === 'high') {
+      // ambient occlusion: the dark creases under shelves and behind packs
+      const gtao = new GTAOPass(this.scene, this.camera, window.innerWidth, window.innerHeight);
+      gtao.output = GTAOPass.OUTPUT.Default;
+      gtao.blendIntensity = 0.95;
+      gtao.updateGtaoMaterial({ radius: 0.55, distanceExponent: 1.6, thickness: 1.2, scale: 1.0, samples: 12 });
+      gtao.updatePdMaterial({ lumaPhi: 8, depthPhi: 2, normalPhi: 3, radius: 5, rings: 2, samples: 12 });
+      this.gtao = gtao;
+      this.composer.addPass(gtao);
+    }
+
+    // bloom on the ceiling panels and speculars — this is what makes it read as a camera
+    const bloom = new UnrealBloomPass(
+      new THREE.Vector2(window.innerWidth, window.innerHeight),
+      this.tier === 'high' ? 0.34 : 0.26,   // strength
+      0.7,                                   // radius
+      0.82                                   // threshold: only really bright things glow
+    );
+    this.bloom = bloom;
+    this.composer.addPass(bloom);
+
+    this.composer.addPass(new OutputPass());
+
+    // film grade: gentle lift/gamma, vignette, a touch of grain
+    const GradeShader = {
+      uniforms: {
+        tDiffuse: { value: null },
+        uTime: { value: 0 },
+        uVignette: { value: 0.16 },
+        uGrain: { value: 0.018 },
+        uLift: { value: new THREE.Vector3(0.004, 0.002, 0.0) },
+      },
+      vertexShader: `varying vec2 vUv; void main(){ vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0); }`,
+      fragmentShader: `
+        uniform sampler2D tDiffuse; uniform float uTime, uVignette, uGrain; uniform vec3 uLift;
+        varying vec2 vUv;
+        float hash(vec2 p){ return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+        void main(){
+          vec4 c = texture2D(tDiffuse, vUv);
+          // warm highlight / cool shadow split, like a graded photograph
+          vec3 col = c.rgb + uLift;
+          col = mix(col, col * vec3(1.02, 1.004, 0.985), smoothstep(0.55, 1.0, dot(col, vec3(0.33))));
+          col = mix(col, col * vec3(0.96, 0.985, 1.02), 1.0 - smoothstep(0.0, 0.45, dot(col, vec3(0.33))));
+          // vignette
+          float d = distance(vUv, vec2(0.5));
+          col *= 1.0 - uVignette * smoothstep(0.28, 0.92, d);
+          // fine grain so flat walls do not band
+          float g = hash(vUv * vec2(1920.0, 1080.0) + uTime) - 0.5;
+          col += g * uGrain;
+          gl_FragColor = vec4(col, c.a);
+        }`,
+    };
+    this.gradePass = new ShaderPass(GradeShader);
+    this.composer.addPass(this.gradePass);
+
+    window.addEventListener('resize', () => {
+      this.composer.setSize(window.innerWidth, window.innerHeight);
+      if (this.gtao) this.gtao.setSize(window.innerWidth, window.innerHeight);
     });
   }
 
@@ -641,7 +728,10 @@ export class ShopScene {
           mesh.traverse((o) => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; } });
           mesh.position.set(side * SHELF_X + side * 0.02, BY + level * LH + 0.045,
             group.position.z + z);
-          mesh.rotation.y = side < 0 ? Math.PI / 2 : -Math.PI / 2;
+          const jitter = (k) => (Math.sin((product.id.charCodeAt(1) || 1) * 12.9 + k * 78.2) * 43758.5453) % 1;
+          const j1 = jitter(level * 10 + f), j2 = jitter(level * 10 + f + 0.5);
+          mesh.rotation.y = (side < 0 ? Math.PI / 2 : -Math.PI / 2) + (j1 - 0.5) * 0.10;
+          mesh.rotation.z = (j2 - 0.5) * 0.05;
           aisle.add(mesh);
           this.products.push(mesh);
           mesh.userData.home = mesh.position.clone();
@@ -1318,7 +1408,9 @@ export class ShopScene {
 
       this.updateTrolley(dt);
 
-      this.renderer.render(this.scene, this.camera);
+      if (this.gradePass) this.gradePass.uniforms.uTime.value = now * 0.001;
+      if (this.composer) this.composer.render();
+      else this.renderer.render(this.scene, this.camera);
     };
     tick();
   }
