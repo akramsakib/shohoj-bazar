@@ -1,0 +1,12 @@
+{
+  "name": "shohoj-bazar-virtual-shop",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Shohoj Bazar — a virtual super shop for Bangladesh. Section 1: the walkable shop. Static site, zero dependencies.",
+  "scripts": {
+    "start": "node server.js",
+    "preview": "node server.js",
+    "pages": "BASE_PATH=/shohoj-bazar node server.js"
+  },
+  "license": "UNLICENSED"
+}

@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
+<meta name="theme-color" content="#06301d" />
+<title>Shohoj Bazar — walk into the shop</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Hind+Siliguri:wght@400;500;600;700&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="css/shop.css" />
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🛒</text></svg>" />
+</head>
+<body>
+<canvas id="shop" aria-label="Virtual super shop"></canvas>
+
+<!-- dimmer for the held-product view -->
+<div id="vignette"></div>
+
+<!-- =============== SCENE 0 — the street =============== -->
+<section id="entry" class="scene">
+  <div class="entry-inner">
+    <div class="entry-mark">🛒</div>
+    <h1>Shohoj Bazar</h1>
+    <p class="entry-bn">সহজ বাজার — ভেতরে আসুন, বাজার করুন</p>
+    <p class="entry-sub">A super shop you can walk into. Aisle by aisle, shelf by shelf — pick things up, look at them, put them in your trolley.</p>
+    <div class="entry-actions">
+      <button id="enterBtn" class="btn big">Enter the shop <span class="arrow">→</span></button>
+      <a href="#quick" id="quickLink" class="btn ghost">I'm in a hurry</a>
+    </div>
+    <div class="entry-meta">
+      <span>🕒 Open now · 8 AM – 10 PM</span>
+      <span>📍 Delivering across Bangladesh</span>
+      <span>💳 Pay online — bKash, Nagad, card</span>
+    </div>
+    <p class="entry-staff">On the floor right now: <b id="entryStaff"></b></p>
+  </div>
+  <div class="entry-cue">↓</div>
+</section>
+
+<!-- =============== HUD =============== -->
+<div id="hud" class="hidden">
+  <div class="hud-left">
+    <button id="brandHome" class="brand-chip" title="Back to the entrance">🛒 <b>Shohoj Bazar</b></button>
+    <button id="mapBtn" class="hud-chip">🗺 <span data-i18n="departments">Departments</span></button>
+  </div>
+
+  <div class="hud-search">
+    <input id="search" type="search" autocomplete="off" placeholder="Search the shop — or ask an assistant" />
+    <div id="searchResults" class="search-results hidden"></div>
+  </div>
+
+  <div class="hud-right">
+    <button id="langBtn" class="hud-chip">বাংলা</button>
+    <button id="staffBtn" class="hud-chip staff">
+      <span class="live-dot"></span> <span data-i18n="support">Customer service</span>
+      <span id="staffCount" class="pill">3</span>
+    </button>
+    <button id="trolleyBtn" class="hud-chip trolley">
+      🛍 <span data-i18n="trolley">Trolley</span>
+      <span id="trolleyCount" class="pill zero">0</span>
+      <span id="trolleyTotal" class="trolley-total">৳0</span>
+    </button>
+  </div>
+</div>
+
+<!-- walking hint -->
+<div id="walkHint" class="hidden"><span>scroll</span> or <span>swipe up</span> to walk the aisle · tap a product to pick it up</div>
+
+<!-- aisle strip -->
+<div id="aisleStrip" class="hidden">
+  <div class="aisle-name">Aisle 1 · <b data-i18n="aisle1">Rice &amp; Grains</b> <span class="aisle-bn">চাল ও দানা</span></div>
+  <div class="aisle-depth"><i id="depthBar"></i></div>
+</div>
+
+<!-- =============== DEPARTMENT MAP =============== -->
+<section id="map" class="panel hidden">
+  <div class="panel-head">
+    <h2>🗺 <span data-i18n="departments">Departments</span></h2>
+    <button class="close" data-close="map">✕</button>
+  </div>
+  <p class="panel-sub">Twelve departments, laid out the way a real shop is. Walk to any of them.</p>
+  <div id="mapGrid" class="map-grid"></div>
+  <div class="map-staff">
+    <div class="map-staff-title">On the floor now</div>
+    <div id="mapStaff" class="staff-row"></div>
+  </div>
+</section>
+
+<!-- =============== PICK IT UP =============== -->
+<section id="inspect" class="inspect hidden">
+  <div class="inspect-card">
+    <button class="close" data-close="inspect">✕</button>
+    <div class="inspect-badge" id="iBadge">In your hand</div>
+    <h2 id="iName">Product</h2>
+    <div class="inspect-bn" id="iBn"></div>
+    <div class="inspect-row">
+      <div class="inspect-price" id="iPrice"></div>
+      <div class="inspect-mrp" id="iMrp"></div>
+    </div>
+    <p class="inspect-blurb" id="iBlurb"></p>
+    <dl class="inspect-facts">
+      <div><dt>Unit</dt><dd id="iUnit"></dd></div>
+      <div><dt>Rating</dt><dd id="iRating"></dd></div>
+      <div><dt>On the shelf</dt><dd id="iShelf"></dd></div>
+      <div><dt>Sold</dt><dd id="iSold"></dd></div>
+    </dl>
+    <div class="inspect-hint" id="iHint">Drag to turn it · pinch or scroll to look closer</div>
+    <button id="addBtn" class="btn big">Add to trolley <span id="iAddPrice"></span></button>
+    <button class="btn ghost small" id="askBtn">Ask an assistant about this</button>
+  </div>
+  <div class="inspect-nav">
+    <button id="prevBtn">‹ prev</button><button id="nextBtn">next ›</button>
+  </div>
+</section>
+
+<!-- =============== TROLLEY =============== -->
+<aside id="trolley" class="drawer hidden">
+  <div class="panel-head">
+    <h2>🛍 <span data-i18n="trolley">Your trolley</span> <span id="tCount" class="muted"></span></h2>
+    <button class="close" data-close="trolley">✕</button>
+  </div>
+  <div id="trolleyBody" class="drawer-body"></div>
+  <div id="trolleyFoot" class="drawer-foot"></div>
+</aside>
+
+<!-- =============== STAFF =============== -->
+<aside id="staff" class="drawer hidden">
+  <div class="panel-head">
+    <h2><span class="live-dot"></span> <span data-i18n="support">Customer service</span></h2>
+    <button class="close" data-close="staff">✕</button>
+  </div>
+  <div id="staffBody" class="drawer-body"></div>
+  <div id="chat" class="chat hidden">
+    <div class="chat-head">
+      <button class="back" id="chatBack">‹</button>
+      <div class="chat-who"><b id="chatName"></b><span id="chatRole"></span></div>
+      <div class="chat-actions">
+        <button id="callBtn" title="Call">📞</button>
+      </div>
+    </div>
+    <div id="chatLog" class="chat-log"></div>
+    <form id="chatForm" class="chat-form">
+      <input id="chatInput" placeholder="Type a message…" autocomplete="off" />
+      <button type="submit">➤</button>
+    </form>
+  </div>
+</aside>
+
+<!-- =============== QUICK SHOP (2D fallback) =============== -->
+<section id="quick" class="panel wide hidden">
+  <div class="panel-head">
+    <h2>Fast shop — no walking</h2>
+    <button class="close" data-close="quick">✕</button>
+  </div>
+  <p class="panel-sub">Same shop, same prices. A plain list for when you're in a hurry or on a slow connection.</p>
+  <div id="quickGrid" class="quick-grid"></div>
+</section>
+
+<div id="scrim" class="hidden"></div>
+<div id="toast" class="toast hidden"></div>
+<div id="loader">
+  <div class="loader-mark">🛒</div>
+  <div class="loader-bar"><i></i></div>
+  <p>Opening the shop…</p>
+</div>
+
+<script type="module" src="js/shop/main.js"></script>
+</body>
+</html>
