@@ -8,11 +8,14 @@ import { GTAOPass } from '../../vendor/jsm/postprocessing/GTAOPass.js';
 import { UnrealBloomPass } from '../../vendor/jsm/postprocessing/UnrealBloomPass.js';
 import { ShaderPass } from '../../vendor/jsm/postprocessing/ShaderPass.js';
 import { OutputPass } from '../../vendor/jsm/postprocessing/OutputPass.js';
-import { buildProduct, priceTag, shelfTalker, ensureBackTexture, glowTexture, pbrSet } from './assets.js';
+import { buildProduct, priceTag, shelfTalker, ensureBackTexture, glowTexture, pbrSet, drawLabel, footprint as packFootprint } from './assets.js';
 import { buildPerson } from './people.js';
 import { buildCheckoutLane } from './checkout.js';
 import { mergeGeometries } from '../../vendor/jsm/utils/BufferGeometryUtils.js';
 import { GLTFLoader } from '../../vendor/jsm/loaders/GLTFLoader.js';
+import { bakeAndMerge } from './optimize.js';
+import { buildAtlas, buildPackField } from './packfield.js';
+import { ShopPhysics } from './physics.js';
 import { initShopSound, setWalkSpeed, beep, announce } from './sound.js';
 
 const ease = (t) => (t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2);
@@ -83,6 +86,8 @@ export class ShopScene {
     this.mode = 'street';
     this.products = [];
     this.picked = null;
+    this.pickedIndex = -1;
+    this.physics = new ShopPhysics();
     this.aisleZ = -6.2;
     this.walkTarget = -6.2;
     this.tween = null;
@@ -110,6 +115,7 @@ export class ShopScene {
     this.lateral = 0;                  // how far you have stepped across the aisle
     this.setCameraVantage('street', true);
     this.initPost();
+    this.initAdaptive();
     this.bindInput();
     this.animate();
   }
@@ -120,7 +126,7 @@ export class ShopScene {
   /* ------------------------------------------------------------ plumbing */
   initRenderer() {
     this.renderer = new THREE.WebGLRenderer({ canvas: this.canvas, antialias: true, powerPreference: 'high-performance' });
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
     this.renderer.setSize(window.innerWidth, window.innerHeight);
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
     this.renderer.toneMapping = THREE.NeutralToneMapping || THREE.ACESFilmicToneMapping;
@@ -183,12 +189,11 @@ export class ShopScene {
     this.holdLight.position.set(0, 1.8, 0);
     this.scene.add(this.holdLight);
 
-    // warm aisle lights, kept to three for the frame budget
-    [-1.5, -6, -11, -16, -21].forEach((z, i) => {
-      const p = new THREE.PointLight(0xffe9cc, i === 0 ? 5.5 : 4.2, 11, 2);
-      p.position.set(0, 2.95, z);
-      this.scene.add(p);
-    });
+    // The aisle used to carry five more real-time point lights ON TOP of the
+    // per-bay lamps that are now baked into the geometry. They lit nothing that
+    // was not already baked, and every extra light costs a fragment loop.
+    // Only what the bake cannot know about stays dynamic: the hand light above
+    // and the checkout hall lamps.
   }
 
   /* --------------------------------------------------- post processing */
@@ -200,7 +205,7 @@ export class ShopScene {
       type: THREE.HalfFloatType, samples: 4,
     });
     this.composer = new EffectComposer(this.renderer, target);
-    this.composer.setPixelRatio(Math.min(window.devicePixelRatio, 1.75));
+    this.composer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
     this.composer.setSize(window.innerWidth, window.innerHeight);
 
     this.composer.addPass(new RenderPass(this.scene, this.camera));
@@ -210,8 +215,10 @@ export class ShopScene {
       const gtao = new GTAOPass(this.scene, this.camera, window.innerWidth, window.innerHeight);
       gtao.output = GTAOPass.OUTPUT.Default;
       gtao.blendIntensity = 0.95;
-      gtao.updateGtaoMaterial({ radius: 0.55, distanceExponent: 1.6, thickness: 1.2, scale: 1.0, samples: 12 });
-      gtao.updatePdMaterial({ lumaPhi: 8, depthPhi: 2, normalPhi: 3, radius: 5, rings: 2, samples: 12 });
+      // 8 samples + a smaller denoise kernel: half the AO cost, no visible
+      // difference at this radius, and the denoiser hides the rest
+      gtao.updateGtaoMaterial({ radius: 0.55, distanceExponent: 1.6, thickness: 1.2, scale: 1.0, samples: 8 });
+      gtao.updatePdMaterial({ lumaPhi: 8, depthPhi: 2, normalPhi: 3, radius: 4, rings: 2, samples: 8 });
       this.gtao = gtao;
       this.composer.addPass(gtao);
     }
@@ -625,6 +632,7 @@ export class ShopScene {
     const BASE_Y = 0.18;
     const bays = dept.layout.bays;
     const totalLen = bays * BAY_W;
+    const slots = [];      // every pack in the department, instanced after stocking
     const AISLE_START_Z = -9.5;
     const AISLE_END_Z = AISLE_START_Z - totalLen;
 
@@ -886,18 +894,17 @@ export class ShopScene {
           n++;
           const z = -BW / 2 + STEP / 2 + f * STEP;
 
-          const mesh = buildProduct(product, { shadow: level === 0 });
-          mesh.traverse((o) => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; } });
-          mesh.position.set(side * SHELF_X + side * 0.02, BY + level * LH + 0.045,
-            group.position.z + z);
           const jitter = (k) => (Math.sin((product.id.charCodeAt(1) || 1) * 12.9 + k * 78.2) * 43758.5453) % 1;
           const j1 = jitter(level * 10 + f), j2 = jitter(level * 10 + f + 0.5);
-          mesh.rotation.y = (side < 0 ? Math.PI / 2 : -Math.PI / 2) + (j1 - 0.5) * 0.10;
-          mesh.rotation.z = (j2 - 0.5) * 0.05;
-          aisle.add(mesh);
-          this.products.push(mesh);
-          mesh.userData.home = mesh.position.clone();
-          mesh.userData.homeRot = mesh.rotation.clone();
+          const foot = packFootprint(product);
+          slots.push({
+            product,
+            position: new THREE.Vector3(side * SHELF_X + side * 0.02, BY + level * LH + 0.045 + foot.h / 2,
+              group.position.z + z),
+            rotation: new THREE.Euler(0, (side < 0 ? Math.PI / 2 : -Math.PI / 2) + (j1 - 0.5) * 0.10, (j2 - 0.5) * 0.05),
+            size: foot,
+            shadow: level === 0,
+          });
 
           if (level <= 1) {
             const tag = priceTag(product);
@@ -960,21 +967,19 @@ export class ShopScene {
         if (!product) return;
         // a real 25 kg sack on the floor: 45 cm wide, 72 cm tall, leaning on a pallet
         const sack = { ...product, shape: 'sack', bulkDims: { w: 0.42, h: 0.66, d: 0.20, bulge: 0.07 } };
-        const stack = new THREE.Group();
         for (let c = 0; c < 2; c++) {
-          const m = buildProduct(sack, { shadow: c === 0 });
-          m.position.set(c === 0 ? -0.02 : 0.03, 0.10 + c * 0.64, c === 0 ? 0 : 0.02);
-          // sacks face the customer walking in, not the shelf
-          m.rotation.y = (c === 1 ? 0.10 : -0.06);
-          m.rotation.z = c === 1 ? 0.02 : 0;
-          stack.add(m);
-          this.products.push(m);
-          m.userData.home = m.position.clone();
-          m.userData.homeRot = m.rotation.clone();
+          slots.push({
+            product,
+            position: new THREE.Vector3(
+              1.52 + (c === 0 ? -0.02 : 0.03),
+              0.11 + 0.10 + c * 0.64 + 0.33,
+              AISLE_START_Z - 3.05 - i * 0.58 + (c === 0 ? 0 : 0.02)
+            ),
+            rotation: new THREE.Euler(0, (c === 1 ? 0.10 : -0.06), (c === 1 ? 0.02 : 0)),
+            size: { w: 0.42, h: 0.66, d: 0.20 },
+            shadow: c === 0,
+          });
         }
-        stack.position.set(1.52, 0.11, AISLE_START_Z - 3.05 - i * 0.58);
-        aisle.add(stack);
-        this.bulkGroups.push(stack);
       });
     }
 
@@ -1267,6 +1272,34 @@ export class ShopScene {
       aisle.add(tube);
     }
 
+    /* ---- one instanced field for every pack in the department ---- */
+    const atlas = buildAtlas(dept.products, drawLabel);
+    this.packField = buildPackField(slots, atlas);
+    this.packField.mesh.castShadow = true;
+    aisle.add(this.packField.mesh);
+    this.products = [this.packField.mesh];        // what the raycaster hits
+    this.packAtlas = atlas;
+    console.info('[packs]', slots.length, 'packs in one instanced field');
+
+    /* ---- physical world: the things you cannot walk through ---- */
+    const P = this.physics;
+    const midZ = (AISLE_START_Z + AISLE_END_Z) / 2;
+    const runLen = Math.abs(AISLE_START_Z - AISLE_END_Z);
+    // the two shelving runs
+    [-1, 1].forEach((side) => {
+      P.addBox({ x: 0.42, y: 1.35, z: runLen / 2 },
+        { x: side * (SHELF_X + 0.22), y: 1.35, z: midZ });
+    });
+    // checkout counter, bagging shelf and the hall walls
+    P.addBox({ x: 1.7, y: 0.44, z: 0.475 }, { x: 0, y: 0.44, z: CZ });
+    P.addBox({ x: 0.35, y: 0.44, z: 0.4 }, { x: 1.95, y: 0.44, z: CZ });
+    P.addBox({ x: 2.55, y: 1.75, z: 0.1 }, { x: -2.55, y: 1.75, z: CZ - 1.0 });
+    P.addBox({ x: 2.55, y: 1.75, z: 0.1 }, { x: 2.55, y: 1.75, z: CZ - 1.0 });
+    P.addBox({ x: 2.55, y: 1.75, z: 0.1 }, { x: 0, y: 1.75, z: CZ - 5.55 });
+    // weigh counter at the end of the run, and the promo island at the mouth
+    P.addBox({ x: 2.1, y: 0.8, z: 0.35 }, { x: 0, y: 0.8, z: AISLE_END_Z + 0.55 });
+    P.addBox({ x: 0.62, y: 0.06, z: 1.0 }, { x: 1.55, y: 0.06, z: AISLE_START_Z - 3.4 });
+
     this.checkout = buildCheckoutLane(CZ, 0);
     aisle.add(this.checkout.group);
     this.checkoutQueue = [];
@@ -1274,6 +1307,17 @@ export class ShopScene {
 
     this.scene.add(aisle);
     this.aisleGroup = aisle;
+
+    /* One-time static pass: weld the shelving into batches and bake the lamps
+       into the geometry. Everything pickable or animated is left alone. */
+    const skip = new Set([this.checkout.group, ...this.products, ...this.people.map((p) => p.group)]);
+    if (this.trolley) skip.add(this.trolley);
+    try {
+      this.bakeStats = bakeAndMerge(aisle, { exclude: skip, ambient: 0x241f18, scale: 1.0, wrap: 0.4 });
+      console.info('[optimise]', JSON.stringify(this.bakeStats));
+    } catch (e) {
+      console.warn('[optimise] skipped', e);
+    }
     // the aisle runs toward -z, so walkMin is the far end and walkMax the mouth
     this.walkMin = AISLE_END_Z + 2.6;
     this.walkMax = AISLE_START_Z + 1.2;
@@ -1395,6 +1439,27 @@ export class ShopScene {
     this.basket = new THREE.Group();
     g.add(this.basket);
 
+    // a soft contact shadow that travels with the trolley — without it the basket
+    // floats, however good the wire is
+    const shadowCanvas = document.createElement('canvas');
+    shadowCanvas.width = shadowCanvas.height = 128;
+    const sctx = shadowCanvas.getContext('2d');
+    const grad = sctx.createRadialGradient(64, 64, 6, 64, 64, 62);
+    grad.addColorStop(0, 'rgba(0,0,0,.55)');
+    grad.addColorStop(0.5, 'rgba(0,0,0,.26)');
+    grad.addColorStop(1, 'rgba(0,0,0,0)');
+    sctx.fillStyle = grad;
+    sctx.fillRect(0, 0, 128, 128);
+    const shadowTex = new THREE.CanvasTexture(shadowCanvas);
+    this.trolleyShadow = new THREE.Mesh(
+      new THREE.PlaneGeometry(1.05, 1.35),
+      new THREE.MeshBasicMaterial({ map: shadowTex, transparent: true, depthWrite: false, opacity: 0.9 })
+    );
+    this.trolleyShadow.rotation.x = -Math.PI / 2;
+    this.trolleyShadow.position.y = 0.004;
+    this.trolleyShadow.renderOrder = 1;
+    this.scene.add(this.trolleyShadow);
+
     this.trolleyBody = g;
     g.visible = false;
     this.trolley = g;
@@ -1420,8 +1485,21 @@ export class ShopScene {
       [...this.trolley.children].forEach((c) => {
         if (c !== keep) this.trolley.remove(c);
       });
+      // the wire was reading as pale white spray against a bright hall
+      model.traverse((o) => {
+        if (!o.isMesh || !o.material) return;
+        const m = o.material;
+        if (m.metalness !== undefined) { m.metalness = Math.min(m.metalness, 0.62); }
+        if (m.roughness !== undefined) { m.roughness = Math.max(m.roughness, 0.34); }
+        m.envMapIntensity = 0.55;
+        m.needsUpdate = true;
+      });
       this.trolley.add(model);
       this.trolley.userData.modelled = true;
+      // the trolley becomes a rigid body: compound basket, driven by a spring
+      this.physics.attachTrolley(this.trolley, {
+        halfW: 0.26, halfL: 0.43, floorY: 0.46, rimY: 0.95,
+      });
     }, undefined, (err) => {
       console.warn('trolley model failed to load, keeping the built one', err);
     });
@@ -1433,42 +1511,73 @@ export class ShopScene {
     this.updateTrolley(1);
   }
 
-  /* Put a pack in the basket — this is the shopper's own trolley, so it is visible. */
+  /* Put a pack in the basket. It is a rigid body now: it falls, hits the others,
+     tumbles and settles wherever the physics leaves it. */
   putInTrolley(product) {
     if (!this.trolley) return;
     this.takeTrolley();
-    const n = this.basket.children.length;
     const mesh = buildProduct({ ...product, shape: product.shape }, { shadow: false });
     const box = new THREE.Box3().setFromObject(mesh);
     const h = Math.max(box.max.y - box.min.y, 0.1);
-    mesh.scale.setScalar(THREE.MathUtils.clamp(0.44 / h, 0.35, 1.3));
-    const cols = 3;
-    const col = n % cols, row = Math.floor(n / cols) % 2, layer = Math.floor(n / (cols * 2));
-    // packed into the back of the basket, tops poking above the rim like a real trolley
-    mesh.position.set(-0.15 + col * 0.15, 0.46 + layer * 0.26, -0.30 + row * 0.20);
-    mesh.rotation.y = Math.PI + (n % 2 ? 0.26 : -0.20);
-    mesh.rotation.z = (n % 3 === 0 ? 0.10 : -0.05);
-    this.basket.add(mesh);
+    const s = THREE.MathUtils.clamp(0.34 / h, 0.30, 1.0);
+    mesh.scale.setScalar(s);
+    const size = {
+      w: Math.max((box.max.x - box.min.x) * s, 0.06),
+      h: Math.max(h * s, 0.06),
+      d: Math.max((box.max.z - box.min.z) * s, 0.06),
+    };
+    // make sure the body is where the trolley actually is before we aim a drop
+    if (this.physics.trolley) {
+      const tb = this.physics.trolley.body;
+      if (Math.hypot(tb.position.x - this.trolley.position.x, tb.position.z - this.trolley.position.z) > 1.2) {
+        this.physics.teleportTrolley(this.trolley.position.x, this.trolley.position.z);
+      }
+    }
+    // buildProduct sits its origin on the base; the body's origin is the centre
+    mesh.geometry && mesh.geometry.center && 0;
+    const drop = this.physics.basketDropPoint((Math.random() - 0.5) * 0.22);
+    drop.y += 0.16 + Math.random() * 0.05;
+    const q = new THREE.Quaternion().setFromEuler(new THREE.Euler(0, Math.random() * Math.PI, 0));
+    // the pack artwork sits on its base; a rigid body's origin is its centre, so
+    // wrap it and shift it down half its height inside the holder
+    const holder = new THREE.Group();
+    mesh.position.y = -size.h / 2;
+    holder.add(mesh);
+    this.scene.add(holder);
+    const entry = this.physics.addPack(holder, size, drop, q);
+    entry.body.angularVelocity.set((Math.random() - 0.5) * 1.2, 0, (Math.random() - 0.5) * 1.2);
+    // stay in WORLD space: physics writes world transforms, so parenting these to
+    // the trolley group applied its transform twice and fired the packs down the aisle
+    this.basketWorldSpace = true;
+    this.basketPacks = this.basketPacks || [];
+    this.basketPacks.push(entry);
+    return entry;
   }
 
   updateTrolley(dt) {
     if (!this.trolley || !this.trolley.visible) return;
+    const cam = this.camera;
     if (this.mode === 'checkout') {
-      // parked beside the belt, exactly where you would leave it
+      // parked beside the belt, clear of the counter — physics stops it there
       const parked = new THREE.Vector3(0.98, 0, (this.checkoutZ || -30) + 2.35);
-      if (this.trolley.position.distanceTo(parked) > 1.0) this.trolley.position.copy(parked);
-      else this.trolley.position.lerp(parked, Math.min(1, dt * 8));
+      if (this.trolley.position.distanceTo(parked) > 1.0) {
+        // move the trolley AND its contents; snapping the body alone used to
+        // leave a full basket of shopping behind in the middle of the hall
+        if (this.physics.trolley) this.physics.trolley.yaw = Math.PI * 0.5;
+        this.physics.teleportTrolley(parked.x, parked.z);
+        this.trolley.position.copy(parked);
+      }
+      this.physics.updateTrolley(parked, dt);
+      this.physics.syncTrolley();
       this.trolley.rotation.y = Math.PI * 0.5;
-      this.trolley.position.y = 0;
+      this.syncTrolleyShadow();
       return;
     }
-    const cam = this.camera;
     const fwd = new THREE.Vector3();
     cam.getWorldDirection(fwd);
     fwd.y = 0;
     if (fwd.lengthSq() < 1e-4) fwd.set(0, 0, -1);
     fwd.normalize();
-    // the trolley follows your body: it swings after the head, it does not snap to it
     if (this.trolleyHeading === undefined) this.trolleyHeading = Math.atan2(fwd.x, fwd.z);
     let want = Math.atan2(fwd.x, fwd.z);
     let d = want - this.trolleyHeading;
@@ -1478,16 +1587,17 @@ export class ShopScene {
     const body = new THREE.Vector3(Math.sin(this.trolleyHeading), 0, Math.cos(this.trolleyHeading));
     const target = cam.position.clone().addScaledVector(body, this.portrait ? 1.45 : 1.72);
     target.y = 0;
-    // the trolley is in your hands: it must never lag behind the camera
-    const k = Math.min(1, dt * 16);
-    this.trolley.position.x += (target.x - this.trolley.position.x) * k;
-    this.trolley.position.z += (target.z - this.trolley.position.z) * k;
-    if (this.trolley.position.distanceTo(target) > 1.6) this.trolley.position.copy(target);
-    // face the same way the shopper faces
-    this.trolley.rotation.y = this.trolleyHeading + Math.PI;
-    // a little rolling bounce while walking
-    const moving = Math.abs(this.aisleZ - this.walkTarget) > 0.02;
-    this.trolley.position.y = moving ? Math.sin(performance.now() * 0.012) * 0.006 : 0;
+    this.physics.updateTrolley(target, dt);
+    this.physics.syncTrolley();
+    this.syncTrolleyShadow();
+  }
+
+  syncTrolleyShadow() {
+    if (!this.trolleyShadow || !this.trolley) return;
+    this.trolleyShadow.visible = this.trolley.visible;
+    this.trolleyShadow.position.x = this.trolley.position.x;
+    this.trolleyShadow.position.z = this.trolley.position.z;
+    this.trolleyShadow.rotation.z = -this.trolley.rotation.y;
   }
 
   /* ------------------------------------------------------------ checkout */
@@ -1639,11 +1749,36 @@ export class ShopScene {
     this.raycaster.setFromCamera(ndc, this.camera);
     const hits = this.raycaster.intersectObjects(this.products, true);
     for (const hit of hits) {
+      if (hit.instanceId !== undefined && this.packField) {
+        const product = this.packField.products[hit.instanceId];
+        if (product) return this.heroFor(product, hit.instanceId);
+      }
       let obj = hit.object;
       while (obj && !obj.userData.product) obj = obj.parent;
       if (obj && obj.userData.product) return obj;
     }
     return null;
+  }
+
+  /* A single, fully detailed pack for the one product you are holding.
+     The shelf stock is instanced, so the hero is built on demand, placed in the
+     slot it came from, and the instance in that slot is hidden — take a pack off
+     the shelf and the shelf shows the gap, exactly like the real thing. */
+  heroFor(product, index) {
+    if (index === undefined && this.packField) index = this.packField.indexOf(product.id);
+    if (this.picked) this.release();
+    if (this.hero && this.hero.parent) this.hero.parent.remove(this.hero);
+    const slot = (this.packField && index >= 0) ? this.packField.slots[index] : null;
+    const hero = buildProduct(product, { shadow: false });
+    hero.userData.product = product;
+    hero.userData.instanceIndex = index;
+    hero.position.copy(slot ? slot.position : new THREE.Vector3(0, 1, -12));
+    hero.position.y -= (slot ? slot.size.h : 0.3) / 2;   // buildProduct sits on its base
+    hero.rotation.copy(slot ? slot.rotation : new THREE.Euler());
+    this.aisleGroup.add(hero);
+    if (this.packField && slot) this.packField.hide(index);
+    this.hero = hero;
+    return hero;
   }
 
   /* Lift the pack out of the shelf and bring it in front of the camera. */
@@ -1656,6 +1791,7 @@ export class ShopScene {
       this.tween = null;
     }
     this.picked = productGroup;
+    this.pickedIndex = productGroup.userData.instanceIndex;
     ensureBackTexture(productGroup);
     productGroup.traverse((o) => { if (o.userData.isContactShadow) o.visible = false; });
     this.userRotated = false;
@@ -1699,6 +1835,11 @@ export class ShopScene {
     g.userData.inspectTarget = false;
     g.userData.holdScale = undefined;
     g.traverse((o) => { if (o.userData.isContactShadow) o.visible = true; });
+    // put the pack back on the shelf: the instance reappears, the hero is dropped
+    if (this.packField && this.pickedIndex >= 0) this.packField.show(this.pickedIndex);
+    if (g.parent) g.parent.remove(g);
+    if (this.hero === g) this.hero = null;
+    this.pickedIndex = -1;
     this.picked = null;
   }
 
@@ -1793,6 +1934,54 @@ export class ShopScene {
   startWalk(dir) { this.walkHold = dir; }
   stopWalk() { this.walkHold = 0; }
 
+  /* Adaptive quality. A fixed quality preset is wrong on half the machines that
+     open the shop: the same build runs on a 2019 laptop and a 2024 desktop. So we
+     watch the real frame time and spend the budget where it can be afforded:
+     AO first, then resolution, then bloom — and put them back when there is room. */
+  initAdaptive() {
+    this.perf = { frames: 0, time: 0, level: 0, cooldown: 0 };
+    this.levels = [
+      { label: 'ultra', pixelRatio: 1.5, ao: true, bloom: true },
+      { label: 'high', pixelRatio: 1.25, ao: true, bloom: true },
+      { label: 'medium', pixelRatio: 1.0, ao: false, bloom: true },
+      { label: 'low', pixelRatio: 0.85, ao: false, bloom: false },
+    ];
+    this.applyLevel(1);
+  }
+
+  applyLevel(i) {
+    const L = this.levels[Math.max(0, Math.min(this.levels.length - 1, i))];
+    if (!L) return;
+    this.perf.level = i;
+    const dpr = Math.min(window.devicePixelRatio, L.pixelRatio);
+    this.renderer.setPixelRatio(dpr);
+    if (this.composer) this.composer.setPixelRatio(dpr);
+    if (this.gtao) this.gtao.enabled = L.ao && this.tier !== 'low';
+    if (this.bloom) this.bloom.enabled = L.bloom;
+    this.qualityLabel = L.label;
+  }
+
+  watchPerformance(dt) {
+    const p = this.perf;
+    if (!p) return;
+    p.frames++;
+    p.time += dt;
+    if (p.time < 1.4) return;
+    const fps = p.frames / p.time;
+    p.frames = 0;
+    p.time = 0;
+    p.cooldown = Math.max(0, p.cooldown - 1);
+    if (p.cooldown > 0) return;
+    const max = this.levels.length - 1;
+    if (fps < 42 && p.level < max) {
+      this.applyLevel(p.level + 1);
+      p.cooldown = 2;
+    } else if (fps > 75 && p.level > 0) {
+      this.applyLevel(p.level - 1);
+      p.cooldown = 3;
+    }
+  }
+
   /* ---------------------------------------------------------------- loop */
   animate() {
     const tick = () => {
@@ -1800,6 +1989,7 @@ export class ShopScene {
       const now = performance.now();
       const dt = Math.min((now - this.prevTime) / 1000, 0.05);
       this.prevTime = now;
+      this.watchPerformance(dt);
 
       // camera tween
       if (this.tween) {
@@ -1885,9 +2075,6 @@ export class ShopScene {
         if (this.holdLight && this.holdLight.intensity > 0.01) {
           this.holdLight.intensity = lerp(this.holdLight.intensity, 0, 1 - Math.pow(0.01, dt));
         }
-        this.products.forEach((p) => {
-          if (p.scale.x !== 1) p.scale.setScalar(lerp(p.scale.x, 1, 1 - Math.pow(0.01, dt)));
-        });
       }
 
       // shadow camera rides with the shopper, but only re-renders when it has moved
@@ -1910,6 +2097,12 @@ export class ShopScene {
       this.camera.rotateY(this.yaw);
       this.camera.rotateX(this.pitch);
 
+      // physics: drives the trolley's spring, settles the packs, then syncs meshes
+      this.physics.stepWorld(dt);
+      // the shopper is a solid body too — you cannot walk through shelving
+      if (this.camera.position.y < 3) {
+        this.physics.resolveCircle(this.camera.position, 0.34);
+      }
       if (this.mode === 'checkout') this.updateCheckout(dt);
       // wheels go quiet the moment you stop pushing
       if (this.mode === 'aisle' && !this.walkHold && !this.moveInput.f) setWalkSpeed(0);

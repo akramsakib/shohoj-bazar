@@ -456,7 +456,7 @@ function openInspect(product) {
     : 'Drag to turn it — the front and back panels both read up close';
 
   const found = PRODUCTS.find((p) => p.id === product.id);
-  const mesh = scene.products.find((m) => m.userData.product.id === product.id);
+  const mesh = scene.heroFor(product);
   if (mesh) scene.inspect(mesh);
 }
 function closeInspect() {
@@ -471,7 +471,7 @@ function stepInspect(dir) {
   const i = PRODUCTS.findIndex((p) => p.id === state.inspecting.id);
   const next = PRODUCTS[(i + dir + PRODUCTS.length) % PRODUCTS.length];
   closeInspect();
-  const mesh = scene.products.find((m) => m.userData.product.id === next.id);
+  const mesh = scene.heroFor(next);
   if (mesh) {
     scene.aisleZ = Math.min(-5.2, Math.max(-22.5, mesh.position.z + 1.9));
     scene.walkTarget = scene.aisleZ;

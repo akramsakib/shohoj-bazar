@@ -57,7 +57,7 @@ function parseKg(weight) {
 }
 
 /* Real-world footprint per package shape, derived from the pack weight. */
-function footprint(product) {
+export function footprint(product) {
   if (product.bulkDims) return product.bulkDims;   // floor sacks use real 25 kg proportions
   const kg = parseKg(product.weight);
   switch (product.shape) {
@@ -71,7 +71,7 @@ function footprint(product) {
 }
 
 /* ------------------------------------------------------- label artwork */
-function drawLabel(product, ctx, W, H) {
+export function drawLabel(product, ctx, W, H) {
   // Layout follows the real Bangladeshi pack: patterned bands top and bottom,
   // a brand cartouche, the product name in English and Bangla, and a clear
   // oval window with the grain itself showing through.
