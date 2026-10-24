@@ -445,3 +445,17 @@ input { font: inherit; }
   #stickKnob { width: 44px; height: 44px; }
   #lookHint { bottom: 196px; font-size: .7rem; }
 }
+
+/* ---------- camera grade: vignette + warm lift, the last 5% that sells the shot ---------- */
+#grade {
+  position: fixed; inset: 0; z-index: 5; pointer-events: none;
+  background:
+    radial-gradient(120% 90% at 50% 42%, rgba(0,0,0,0) 46%, rgba(24,18,8,.24) 82%, rgba(16,12,5,.44) 100%),
+    linear-gradient(180deg, rgba(255,196,120,.06) 0%, rgba(255,255,255,0) 28%, rgba(0,0,0,0) 74%, rgba(20,14,6,.10) 100%);
+  mix-blend-mode: multiply;
+  opacity: .9;
+}
+#grade::after {
+  content: ''; position: absolute; inset: 0; mix-blend-mode: soft-light;
+  background: linear-gradient(200deg, rgba(255,214,150,.18), rgba(120,190,255,.10));
+}

@@ -24,7 +24,7 @@ export default {
   layout: {
     bays: 3,
     levels: 4,
-    facings: { desktop: 8, mobile: 6 },
+    facings: { desktop: 10, mobile: 7 },
     bulkDisplay: 'sacks',        // 25 kg sacks stacked at the aisle mouth
     endcap: 'weigh-counter',     // the loose-grain counter at the far end
   },
@@ -32,9 +32,9 @@ export default {
   /* Sections inside the department. Products reference these by id.
      Each section gets a hanging sign over its bays. */
   sections: [
-    { id: 'rice',   name: 'Rice',          nameBn: 'চাল',            bays: [0], note: 'Aromatic, boiled and everyday rice by the sack' },
-    { id: 'dal',    name: 'Lentils & Pulses', nameBn: 'ডাল ও ডালজাতীয়', bays: [1], note: 'Masoor, mung, chola and khesari' },
-    { id: 'flour',  name: 'Flour & Flattened Rice', nameBn: 'আটা, ময়দা ও চিড়া', bays: [2], note: 'Atta, maida, suji, besan, chira and muri' },
+    { id: 'rice',   name: 'Rice',          nameBn: 'চাল',            accent: '#0d6138', bays: [0], note: 'Aromatic, boiled and everyday rice by the sack' },
+    { id: 'dal',    name: 'Lentils & Pulses', nameBn: 'ডাল ও ডালজাতীয়', accent: '#8a2f2a', bays: [1], note: 'Masoor, mung, chola and khesari' },
+    { id: 'flour',  name: 'Flour & Flattened Rice', nameBn: 'আটা, ময়দা ও চিড়া', accent: '#a2601a', bays: [2], note: 'Atta, maida, suji, besan, chira and muri' },
   ],
 
   /* ---------------------------------------------------------------

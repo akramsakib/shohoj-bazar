@@ -96,6 +96,16 @@ function drawLabel(product, ctx, W, H) {
   ctx.fillRect(0, 0, W, H * 0.016);
   ctx.fillRect(0, H * 0.984, W, H * 0.016);
 
+  // full-width colour header: the strongest read at shelf distance
+  ctx.fillStyle = a;
+  ctx.fillRect(0, H * 0.095, W, H * 0.27);
+  const hg = ctx.createLinearGradient(0, H * 0.095, 0, H * 0.365);
+  hg.addColorStop(0, 'rgba(255,255,255,.22)');
+  hg.addColorStop(0.5, 'rgba(255,255,255,.02)');
+  hg.addColorStop(1, 'rgba(0,0,0,.22)');
+  ctx.fillStyle = hg;
+  ctx.fillRect(0, H * 0.095, W, H * 0.27);
+
   // brand cartouche
   const bw = W * 0.62, bh = H * 0.115, bx = (W - bw) / 2, by = H * 0.175;
   ctx.save();
@@ -129,6 +139,10 @@ function drawLabel(product, ctx, W, H) {
   ctx.fillStyle = 'rgba(20,30,20,.86)';
   ctx.font = `600 ${H * 0.062}px "Noto Sans Bengali", "Hind Siliguri", "Nirmala UI", sans-serif`;
   ctx.fillText(product.bn, W / 2, H * 0.425);
+
+  // colour footer band, mirroring the header
+  ctx.fillStyle = a;
+  ctx.fillRect(0, H * 0.845, W, H * 0.05);
 
   // the window: an oval cut-out with real grain behind glass
   if (product.shape === 'sack' || product.shape === 'pouch' || product.shape === 'box') {
@@ -269,6 +283,48 @@ function wrap(ctx, text, maxWidth) {
   return lines;
 }
 
+/* soft radial falloff, used for ceiling light halos */
+export function glowTexture() {
+  if (textureCache.has('__glow')) return textureCache.get('__glow');
+  const S = 256;
+  const c = document.createElement('canvas');
+  c.width = c.height = S;
+  const ctx = c.getContext('2d');
+  const g = ctx.createRadialGradient(S / 2, S / 2, 0, S / 2, S / 2, S / 2);
+  g.addColorStop(0, 'rgba(255,247,228,.95)');
+  g.addColorStop(0.35, 'rgba(255,240,205,.42)');
+  g.addColorStop(0.7, 'rgba(255,232,190,.10)');
+  g.addColorStop(1, 'rgba(255,232,190,0)');
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, S, S);
+  const tex = new THREE.CanvasTexture(c);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  textureCache.set('__glow', tex);
+  return tex;
+}
+
+/* subtle roughness breakup so glossy surfaces are not mirror-perfect */
+export function noiseRoughness() {
+  if (textureCache.has('__rough')) return textureCache.get('__rough');
+  const S = 256;
+  const c = document.createElement('canvas');
+  c.width = c.height = S;
+  const ctx = c.getContext('2d');
+  const img = ctx.createImageData(S, S);
+  let seed = 1337;
+  for (let i = 0; i < S * S; i++) {
+    seed = (seed * 1103515245 + 12345) & 0x7fffffff;
+    const v = 150 + ((seed >> 16) % 60);
+    img.data[i * 4] = v; img.data[i * 4 + 1] = v; img.data[i * 4 + 2] = v; img.data[i * 4 + 3] = 255;
+  }
+  ctx.putImageData(img, 0, 0);
+  const tex = new THREE.CanvasTexture(c);
+  tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+  tex.repeat.set(8, 8);
+  textureCache.set('__rough', tex);
+  return tex;
+}
+
 export function labelTexture(product, variant = 'front') {
   const key = product.id + ':' + variant;
   if (textureCache.has(key)) return textureCache.get(key);
@@ -353,11 +409,21 @@ function contactShadow(width) {
 }
 
 function materialsFor(product, sideColour) {
-  const front = new THREE.MeshStandardMaterial({ map: labelTexture(product, 'front'), roughness: 0.72, metalness: 0.02 });
+  // glossy laminated film: low-ish roughness + env map is what makes it read as plastic
+  const front = new THREE.MeshStandardMaterial({
+    map: labelTexture(product, 'front'),
+    roughness: 0.44, metalness: 0.06, envMapIntensity: 1.35,
+    roughnessMap: noiseRoughness(),
+  });
   // the back panel is only generated the first time a pack is picked up
-  const back = new THREE.MeshStandardMaterial({ color: new THREE.Color(product.colour), roughness: 0.75, metalness: 0.02 });
+  const back = new THREE.MeshStandardMaterial({
+    color: new THREE.Color(product.colour), roughness: 0.5, metalness: 0.05, envMapIntensity: 1.2,
+  });
   back.userData.lazyBack = product;
-  const side = new THREE.MeshStandardMaterial({ color: new THREE.Color(sideColour || product.colour), roughness: 0.8, metalness: 0.02 });
+  const side = new THREE.MeshStandardMaterial({
+    color: new THREE.Color(sideColour || product.colour),
+    roughness: 0.62, metalness: 0.03, envMapIntensity: 1.15,
+  });
   // BoxGeometry material order: +x, -x, +y, -y, +z, -z
   return [side, side, side, side, front, back];
 }

@@ -2,7 +2,7 @@
    One continuous WebGL scene. Camera "walks"; nothing reloads. */
 
 import * as THREE from '../../vendor/three.module.js';
-import { buildProduct, priceTag, shelfTalker, ensureBackTexture } from './assets.js';
+import { buildProduct, priceTag, shelfTalker, ensureBackTexture, glowTexture } from './assets.js';
 
 const ease = (t) => (t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2);
 const lerp = (a, b, t) => a + (b - a) * t;
@@ -95,7 +95,11 @@ export class ShopScene {
     this.renderer.setSize(window.innerWidth, window.innerHeight);
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    this.renderer.toneMappingExposure = 0.95;
+    this.renderer.toneMappingExposure = 0.78;
+    // soft shadows are what separate a render from a shop that looks photographed
+    this.renderer.shadowMap.enabled = true;
+    this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    this.renderer.shadowMap.autoUpdate = false;   // refreshed only when the shopper moves
 
     this.camera = new THREE.PerspectiveCamera(58, window.innerWidth / window.innerHeight, 0.05, 90);
     this.camera.position.set(0, 1.65, 15);
@@ -120,13 +124,30 @@ export class ShopScene {
   initScene() {
     this.scene = new THREE.Scene();
     this.scene.background = new THREE.Color('#171a17');
-    this.scene.fog = new THREE.Fog('#efe9dc', 26, 78);
+    this.scene.fog = new THREE.FogExp2('#e8dcc4', 0.014);
 
-    this.scene.add(new THREE.HemisphereLight(0xfff6e6, 0x9c9280, 1.15));
+    this.scene.add(new THREE.HemisphereLight(0xfff2dd, 0x6f6a5c, 0.30));
 
-    const key = new THREE.DirectionalLight(0xfff0d8, 0.85);
-    key.position.set(4, 9, 4);
+    // key light with shadows; its shadow camera follows the shopper each frame
+    const key = new THREE.DirectionalLight(0xfff2dd, 1.15);
+    key.position.set(2.4, 7.5, -6);
+    key.castShadow = true;
+    key.shadow.mapSize.set(1024, 1024);
+    key.shadow.camera.left = -6;
+    key.shadow.camera.right = 6;
+    key.shadow.camera.top = 6;
+    key.shadow.camera.bottom = -6;
+    key.shadow.camera.near = 0.5;
+    key.shadow.camera.far = 24;
+    key.shadow.bias = -0.0012;
+    key.shadow.normalBias = 0.02;
+    key.shadow.radius = 2.5;
+    this.keyLight = key;
     this.scene.add(key);
+    this.scene.add(key.target);
+
+    // image-based lighting from a painted room: gives plastic packs a real sheen
+    this.applyEnvironment();
 
     // a soft light that switches on when you lift a pack into your hand
     this.holdLight = new THREE.PointLight(0xfff4e2, 0, 2.6, 2);
@@ -135,10 +156,64 @@ export class ShopScene {
 
     // warm aisle lights, kept to three for the frame budget
     [-1.5, -6, -11, -16, -21].forEach((z, i) => {
-      const p = new THREE.PointLight(0xffe2b8, i === 0 ? 26 : 19, 14, 2);
+      const p = new THREE.PointLight(0xffe9cc, i === 0 ? 5.5 : 4.2, 11, 2);
       p.position.set(0, 2.95, z);
       this.scene.add(p);
     });
+  }
+
+  /* A painted shop interior used as an environment map. Cheap, and it is the
+     single biggest reason PBR packaging stops looking like flat cardboard. */
+  applyEnvironment() {
+    const W = 1024, H = 512;
+    const c = document.createElement('canvas');
+    c.width = W; c.height = H;
+    const ctx = c.getContext('2d');
+
+    // ceiling: bright warm panels
+    const ceil = ctx.createLinearGradient(0, 0, 0, H * 0.42);
+    ceil.addColorStop(0, '#fffaf0');
+    ceil.addColorStop(0.55, '#fdf1da');
+    ceil.addColorStop(1, '#e6dcc6');
+    ctx.fillStyle = ceil;
+    ctx.fillRect(0, 0, W, H * 0.42);
+
+    // ceiling light strips
+    for (let i = 0; i < 6; i++) {
+      ctx.fillStyle = 'rgba(255,255,255,.95)';
+      ctx.fillRect(W * (0.06 + i * 0.16), H * 0.06, W * 0.07, H * 0.05);
+    }
+
+    // horizon walls, warm cream
+    const wall = ctx.createLinearGradient(0, H * 0.42, 0, H * 0.66);
+    wall.addColorStop(0, '#f2ead7');
+    wall.addColorStop(1, '#ded2b6');
+    ctx.fillStyle = wall;
+    ctx.fillRect(0, H * 0.42, W, H * 0.24);
+
+    // floor: polished tile
+    const flr = ctx.createLinearGradient(0, H * 0.66, 0, H);
+    flr.addColorStop(0, '#d9d3c4');
+    flr.addColorStop(0.4, '#cfc8b7');
+    flr.addColorStop(1, '#b8b1a1');
+    ctx.fillStyle = flr;
+    ctx.fillRect(0, H * 0.66, W, H * 0.34);
+
+    // a couple of green department fascia blocks so reflections carry the brand
+    ctx.fillStyle = 'rgba(13,97,56,.55)';
+    ctx.fillRect(W * 0.02, H * 0.36, W * 0.16, H * 0.07);
+    ctx.fillRect(W * 0.62, H * 0.36, W * 0.16, H * 0.07);
+
+    const tex = new THREE.CanvasTexture(c);
+    tex.mapping = THREE.EquirectangularReflectionMapping;
+    tex.colorSpace = THREE.SRGBColorSpace;
+
+    const pmrem = new THREE.PMREMGenerator(this.renderer);
+    pmrem.compileEquirectangularShader();
+    this.scene.environment = pmrem.fromEquirectangular(tex).texture;
+    this.scene.environmentIntensity = 0.55;
+    pmrem.dispose();
+    tex.dispose();
   }
 
   /* -------------------------------------------------------------- street */
@@ -297,7 +372,7 @@ export class ShopScene {
     });
 
     // a warm light inside the doorway so the shop reads as open and alive
-    const insideGlow = new THREE.PointLight(0xffd9a0, 22, 14, 2);
+    const insideGlow = new THREE.PointLight(0xffd9a0, 8, 12, 2);
     insideGlow.position.set(0, 2.4, Z - 2.5);
     g.add(insideGlow);
 
@@ -313,12 +388,13 @@ export class ShopScene {
     const floor = new THREE.Mesh(
       new THREE.PlaneGeometry(9.5, 46),
       new THREE.MeshPhysicalMaterial({
-        map: floorTexture(), roughness: 0.34, metalness: 0.05,
-        clearcoat: 0.35, clearcoatRoughness: 0.4, color: '#ffffff', envMapIntensity: 1.2,
+        map: floorTexture(), roughness: 0.42, metalness: 0.06,
+        clearcoat: 0.5, clearcoatRoughness: 0.32, color: '#efe9dc', envMapIntensity: 0.9,
       })
     );
     floor.rotation.x = -Math.PI / 2;
     floor.position.set(0, 0, -15);
+    floor.receiveShadow = true;
     g.add(floor);
 
     // ceiling with light strips
@@ -330,13 +406,20 @@ export class ShopScene {
     ceil.position.set(0, 3.4, -15);
     g.add(ceil);
 
-    for (let z = 2; z > -30; z -= 4) {
-      const strip = new THREE.Mesh(
-        new THREE.BoxGeometry(1.5, 0.05, 0.22),
-        new THREE.MeshBasicMaterial({ color: '#fff3d8' })
-      );
-      strip.position.set(0, 3.32, z);
+    const panelMat = new THREE.MeshBasicMaterial({ color: '#fffdf5', toneMapped: false });
+    const glowMat = new THREE.MeshBasicMaterial({
+      map: glowTexture(), transparent: true, opacity: 0.5, depthWrite: false,
+      blending: THREE.AdditiveBlending, toneMapped: false,
+    });
+    for (let z = 2; z > -30; z -= 3.2) {
+      const strip = new THREE.Mesh(new THREE.BoxGeometry(1.9, 0.04, 0.24), panelMat);
+      strip.position.set(0, 3.30, z);
       g.add(strip);
+
+      const halo = new THREE.Mesh(new THREE.PlaneGeometry(3.6, 1.5), glowMat);
+      halo.rotation.x = Math.PI / 2;
+      halo.position.set(0, 3.24, z);
+      g.add(halo);
     }
 
     // side walls
@@ -417,7 +500,7 @@ export class ShopScene {
 
     const shelfMat = new THREE.MeshStandardMaterial({ color: '#fbf8f1', roughness: 0.75 });
     const boardMat = new THREE.MeshStandardMaterial({ color: '#e6e0d2', roughness: 0.7 });
-    const backMat = new THREE.MeshStandardMaterial({ color: '#cfd8cf', roughness: 0.95 });
+    const backMat = new THREE.MeshStandardMaterial({ color: '#b9c1b6', roughness: 0.94 });
 
     const BAY_W = 6.2;
     const SHELF_X = 2.0;
@@ -444,37 +527,66 @@ export class ShopScene {
         [-BAY_W / 2, BAY_W / 2].forEach((z) => {
           const up = new THREE.Mesh(new THREE.BoxGeometry(0.56, LEVELS * LEVEL_H + BASE_Y + 0.5, 0.07), shelfMat);
           up.position.set(0, (LEVELS * LEVEL_H + BASE_Y + 0.5) / 2, z);
+          up.castShadow = true;
+          up.receiveShadow = true;
           group.add(up);
         });
+
+        const section = (dept.sections || []).find((sec) => (sec.bays || []).includes(bay));
 
         for (let i = 0; i <= LEVELS; i++) {
           const y = BASE_Y + i * LEVEL_H;
           const board = new THREE.Mesh(new THREE.BoxGeometry(0.56, 0.045, BAY_W), boardMat);
           board.position.set(0, y, 0);
+          board.castShadow = true;
+          board.receiveShadow = true;
           group.add(board);
+          const railColour = section ? (section.accent || dept.accent || '#0d6138') : '#0d6138';
           const rail = new THREE.Mesh(
             new THREE.BoxGeometry(0.03, 0.075, BAY_W),
-            new THREE.MeshStandardMaterial({ color: '#f6f2e6', roughness: 0.6 })
+            new THREE.MeshStandardMaterial({ color: railColour, roughness: 0.42, metalness: 0.1, envMapIntensity: 1.2 })
           );
           rail.position.set(-side * 0.34, y + 0.045, 0);
+          rail.castShadow = false;
           group.add(rail);
+
+          if (i > 0) {
+            const led = new THREE.Mesh(
+              new THREE.BoxGeometry(0.02, 0.012, BAY_W - 0.25),
+              new THREE.MeshBasicMaterial({ color: '#fff6e2', toneMapped: false })
+            );
+            led.position.set(-side * 0.24, y - 0.028, 0);
+            group.add(led);
+          }
         }
 
         /* department fascia + the section that owns this bay */
-        const section = (dept.sections || []).find((sec) => (sec.bays || []).includes(bay));
         const fascia = new THREE.Mesh(
           new THREE.PlaneGeometry(BAY_W, 0.34),
           new THREE.MeshBasicMaterial({
             map: signTexture(
               (section ? section.name : dept.name).toUpperCase(),
               section ? section.nameBn : dept.nameBn,
-              dept.accent || '#0d6138'
+              (section && section.accent) || dept.accent || '#0d6138'
             ),
           })
         );
         fascia.position.set(-side * 0.31, LEVELS * LEVEL_H + BASE_Y + 0.22, 0);
         fascia.rotation.y = side > 0 ? -Math.PI / 2 : Math.PI / 2;
         group.add(fascia);
+
+        if (section) {
+          const tint = new THREE.Mesh(
+            new THREE.PlaneGeometry(BAY_W - 0.1, LEVELS * LEVEL_H + BASE_Y - 0.1),
+            new THREE.MeshStandardMaterial({
+              color: section.accent || dept.accent || '#0d6138',
+              roughness: 0.85, metalness: 0, transparent: true, opacity: 0.16,
+            })
+          );
+          tint.position.set(-side * 0.26, (LEVELS * LEVEL_H + BASE_Y) / 2, 0);
+          tint.rotation.y = side > 0 ? -Math.PI / 2 : Math.PI / 2;
+          group.add(tint);
+        }
 
         aisle.add(group);
         group.userData = { side, bay, section, BAY_W, LEVELS, LEVEL_H, BASE_Y };
@@ -500,6 +612,11 @@ export class ShopScene {
     const facings = this.portrait ? dept.layout.facings.mobile : dept.layout.facings.desktop;
     const bySection = {};
     dept.products.forEach((p) => { (bySection[p.section] = bySection[p.section] || []).push(p); });
+    // deterministic shuffle per bay+level so a shopper sees variety, not wallpaper
+    const seeded = (n) => {
+      let x = Math.sin(n * 12.9898) * 43758.5453;
+      return x - Math.floor(x);
+    };
 
     const talkerMap = {};
     (dept.talkers || []).forEach((t) => { talkerMap[t.productId] = t.text; });
@@ -511,12 +628,17 @@ export class ShopScene {
       let n = 0;
 
       for (let level = 0; level < LV; level++) {
+        const order = pool
+          .map((p, idx) => ({ p, k: seeded(bay * 31 + level * 7 + idx) }))
+          .sort((a, b) => a.k - b.k)
+          .map((o) => o.p);
         for (let f = 0; f < facings; f++) {
-          const product = pool[n % pool.length];
+          const product = order[f % order.length];
           n++;
           const z = -BW / 2 + STEP / 2 + f * STEP;
 
           const mesh = buildProduct(product, { shadow: level === 0 });
+          mesh.traverse((o) => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; } });
           mesh.position.set(side * SHELF_X + side * 0.02, BY + level * LH + 0.045,
             group.position.z + z);
           mesh.rotation.y = side < 0 ? Math.PI / 2 : -Math.PI / 2;
@@ -546,11 +668,20 @@ export class ShopScene {
     /* ---- bulk display at the aisle mouth ---- */
     this.bulkGroups = [];
     if (dept.layout.bulkDisplay === 'sacks' && (dept.bulk || []).length) {
-      const pallet = new THREE.Mesh(
-        new THREE.BoxGeometry(0.95, 0.1, 1.7),
-        new THREE.MeshStandardMaterial({ color: '#7d5c34', roughness: 0.92 })
-      );
-      pallet.position.set(1.55, 0.05, AISLE_START_Z - 2.6);
+      const woodMat = new THREE.MeshStandardMaterial({ color: '#6b4a2a', roughness: 0.95 });
+      const pallet = new THREE.Group();
+      for (let i = 0; i < 5; i++) {
+        const slat = new THREE.Mesh(new THREE.BoxGeometry(0.95, 0.022, 0.20), woodMat);
+        slat.position.set(0, 0.105, -0.68 + i * 0.34);
+        slat.castShadow = true;
+        pallet.add(slat);
+      }
+      [-0.4, 0, 0.4].forEach((x) => {
+        const beam = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.09, 1.7), woodMat);
+        beam.position.set(x, 0.05, 0);
+        pallet.add(beam);
+      });
+      pallet.position.set(1.55, 0, AISLE_START_Z - 2.6);
       aisle.add(pallet);
 
       (dept.bulk || []).forEach((entry, i) => {
@@ -609,12 +740,80 @@ export class ShopScene {
       aisle.add(counter);
     }
 
+    // promo cards on the endcap face, at eye height, clear of the hanging signs
+    ['SAVE UP TO 20%', 'FRESH DAILY'].forEach((t, i) => {
+      const card = new THREE.Mesh(
+        new THREE.PlaneGeometry(1.15, 0.42),
+        new THREE.MeshBasicMaterial({
+          map: signTexture(t, i ? 'প্রতিদিন তাজা' : 'সাশ্রয় করুন', i ? '#a2601a' : '#8a2f2a'),
+        })
+      );
+      card.position.set((i ? 1 : -1) * 0.85, 1.28, AISLE_END_Z + 0.26);
+      aisle.add(card);
+    });
+
     const endcap = new THREE.Mesh(
       new THREE.BoxGeometry(4.2, 1.6, 0.7),
       new THREE.MeshStandardMaterial({ color: '#f2ede0', roughness: 0.8 })
     );
     endcap.position.set(0, 0.8, AISLE_END_Z - 0.6);
     aisle.add(endcap);
+
+    /* ---- upper-wall promo panels, like the posters every real aisle carries ---- */
+    const promos = [
+      ['TODAY ONLY', 'আজকের অফার', '#8a2f2a'],
+      ['FREE DELIVERY', 'ফ্রি ডেলিভারি', '#0d6138'],
+      ['FRESH STOCK', 'নতুন স্টক', '#a2601a'],
+      ['WEIGH & PACK', 'ওজন করে প্যাক', '#1f5f8b'],
+    ];
+    for (let i = 0; i < Math.ceil(totalLen / BAY_W); i++) {
+      const z = AISLE_START_Z - BAY_W / 2 - i * BAY_W;
+      [-1, 1].forEach((side) => {
+        const promo = promos[(i + (side > 0 ? 1 : 0)) % promos.length];
+        const panel = new THREE.Mesh(
+          new THREE.PlaneGeometry(2.6, 0.78),
+          new THREE.MeshBasicMaterial({ map: signTexture(promo[0], promo[1], promo[2]) })
+        );
+        panel.position.set(side * 2.39, 2.62, z);
+        panel.rotation.y = side > 0 ? -Math.PI / 2 : Math.PI / 2;
+        aisle.add(panel);
+      });
+    }
+
+    /* ---- floor stickers, the way supermarkets mark their own aisles ---- */
+    [AISLE_START_Z - 3.4, AISLE_START_Z - 11.5].forEach((z, i) => {
+      const decal = new THREE.Mesh(
+        new THREE.PlaneGeometry(1.35, 0.75),
+        new THREE.MeshBasicMaterial({
+          map: signTexture(i ? 'ARROWS AHEAD' : 'START HERE', i ? 'সামনে চলুন' : 'এখান থেকে শুরু',
+            i ? '#1f5f8b' : '#0d6138'),
+          transparent: true, opacity: 0.9, depthWrite: false,
+        })
+      );
+      decal.rotation.set(-Math.PI / 2, 0, 0);
+      decal.position.set(0.0, 0.012, z);
+      aisle.add(decal);
+    });
+
+    /* ---- hanging aisle signs above the gondolas ---- */
+    (dept.sections || []).forEach((sec) => {
+      const lastBay = (sec.bays || [0])[(sec.bays || [0]).length - 1];
+      const z = AISLE_START_Z - (lastBay + 1) * BAY_W + 0.35;
+      if (z > AISLE_START_Z - 4.2) return;   // never hang one in your face at the mouth
+      const board = new THREE.Mesh(
+        new THREE.PlaneGeometry(1.55, 0.40),
+        new THREE.MeshBasicMaterial({ map: signTexture(sec.name.toUpperCase(), sec.nameBn, sec.accent || '#0d6138') })
+      );
+      board.position.set(0, 2.52, z);
+      aisle.add(board);
+
+      const wireMat = new THREE.MeshStandardMaterial({ color: '#9aa39c', roughness: 0.5, metalness: 0.4 });
+      [-0.6, 0.6].forEach((x) => {
+        const wire = new THREE.Mesh(new THREE.CylinderGeometry(0.005, 0.005, 0.76, 5), wireMat);
+        wire.position.set(x, 3.12, z);
+        aisle.add(wire);
+      });
+    });
 
     this.scene.add(aisle);
     this.aisleGroup = aisle;
@@ -1070,7 +1269,7 @@ export class ShopScene {
           .addScaledVector(right, this.portrait ? 0 : -0.34)
           .addScaledVector(up, this.portrait ? 0.46 : 0.02);
         this.holdLight.position.copy(target).add(new THREE.Vector3(0, 0.45, 0));
-        this.holdLight.intensity = lerp(this.holdLight.intensity, 2.6, 1 - Math.pow(0.01, dt));
+        this.holdLight.intensity = lerp(this.holdLight.intensity, 1.9, 1 - Math.pow(0.01, dt));
         this.picked.position.lerp(target, 1 - Math.pow(0.0015, dt));
         if (this.picked.userData.holdScale === undefined) {
           // size the pack so it fills the same slice of the screen whatever it weighs
@@ -1095,6 +1294,21 @@ export class ShopScene {
         this.products.forEach((p) => {
           if (p.scale.x !== 1) p.scale.setScalar(lerp(p.scale.x, 1, 1 - Math.pow(0.01, dt)));
         });
+      }
+
+      // shadow camera rides with the shopper, but only re-renders when it has moved
+      if (this.keyLight) {
+        const cam = this.camera.position;
+        const last = this.shadowAnchor;
+        if (!last || Math.abs(cam.z - last.z) > 1.2 || Math.abs(cam.x - last.x) > 0.6) {
+          const k = this.keyLight;
+          k.position.set(cam.x + 2.4, 7.5, cam.z - 4.5);
+          k.target.position.set(cam.x, 0.6, cam.z - 3.5);
+          k.target.updateMatrixWorld();
+          k.shadow.needsUpdate = true;
+          this.renderer.shadowMap.needsUpdate = true;
+          this.shadowAnchor = { x: cam.x, z: cam.z };
+        }
       }
 
       this.camera.lookAt(this.lookTarget);
