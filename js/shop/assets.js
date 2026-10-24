@@ -419,13 +419,31 @@ export function labelTexture(product, variant = 'front') {
 function pillowBox(w, h, d, bulge) {
   const key = `pb:${w}:${h}:${d}:${bulge}`;
   if (geoCache.has(key)) return geoCache.get(key);
-  const geo = new THREE.BoxGeometry(w, h, d, 8, 10, 2);
+  const geo = new THREE.BoxGeometry(w, h, d, 8, 12, 2);
   const pos = geo.attributes.position;
+  const smooth = (t) => t * t * (3 - 2 * t);
   for (let i = 0; i < pos.count; i++) {
-    const x = pos.getX(i), y = pos.getY(i), z = pos.getZ(i);
+    let x = pos.getX(i), y = pos.getY(i), z = pos.getZ(i);
     const nx = x / (w / 2), ny = y / (h / 2);
+    // soft belly: the film bulges outwards where the grain sits
     const bulgeAmt = Math.cos(nx * Math.PI / 2) * Math.cos(ny * Math.PI / 2) * bulge;
-    pos.setZ(i, z + Math.sign(z || 1) * bulgeAmt);
+    z += Math.sign(z || 1) * bulgeAmt;
+    x += Math.sign(x || 1) * bulgeAmt * 0.22;
+
+    // the top of a rice bag is crimped shut: narrower than the belly
+    if (ny > 0.45) {
+      const t = smooth(Math.min(1, (ny - 0.45) / 0.55));
+      x *= 1 - 0.20 * t;
+      z *= 1 - 0.16 * t;
+      y -= t * t * h * 0.012;
+    }
+    // and the bottom sags where the weight sits
+    if (ny < -0.55) {
+      const t = smooth(Math.min(1, (-ny - 0.55) / 0.45));
+      x *= 1 - 0.06 * t;
+      z *= 1 - 0.04 * t;
+    }
+    pos.setXYZ(i, x, y, z);
   }
   geo.computeVertexNormals();
   geoCache.set(key, geo);

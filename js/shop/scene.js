@@ -9,6 +9,8 @@ import { UnrealBloomPass } from '../../vendor/jsm/postprocessing/UnrealBloomPass
 import { ShaderPass } from '../../vendor/jsm/postprocessing/ShaderPass.js';
 import { OutputPass } from '../../vendor/jsm/postprocessing/OutputPass.js';
 import { buildProduct, priceTag, shelfTalker, ensureBackTexture, glowTexture, pbrSet } from './assets.js';
+import { buildPerson } from './people.js';
+import { initShopSound, setWalkSpeed, beep, announce } from './sound.js';
 
 const ease = (t) => (t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2);
 const lerp = (a, b, t) => a + (b - a) * t;
@@ -79,6 +81,15 @@ export class ShopScene {
     this.walkTarget = -6.2;
     this.tween = null;
     this.listeners = { pick: [], walk: [] };
+    const startAudio = () => {
+      initShopSound();
+      window.removeEventListener('pointerdown', startAudio);
+      window.removeEventListener('keydown', startAudio);
+    };
+    window.addEventListener('pointerdown', startAudio);
+    window.addEventListener('keydown', startAudio);
+    // a shop announcement every so often, like the real thing
+    setInterval(() => { if (Math.random() < 0.45) announce(); }, 42000);
 
     this.initRenderer();
     this.initScene();
@@ -1105,6 +1116,34 @@ export class ShopScene {
       });
     });
 
+    /* ---- people: a shop with nobody in it is a showroom, not a super shop ---- */
+    this.people = [];
+    const cast = [
+      { x: -1.48, z: AISLE_START_Z - 8.5, speed: 0.46, dir: -1, opts: { shirt: '#3d6b78', tunic: '#3d6b78', trousers: '#2b3038', scarf: '#a63a44', height: 1.62, build: 'slim' } },
+      { x: 1.52, z: AISLE_START_Z - 16.0, speed: 0.62, dir: 1, opts: { shirt: '#d9d3c4', trousers: '#3a3f46', height: 1.71 } },
+      { x: -1.42, z: AISLE_START_Z - 27.0, speed: 0.42, dir: 1, opts: { shirt: '#5d7050', tunic: '#5d7050', trousers: '#22262b', height: 1.66, build: 'slim' } },
+      { x: 1.46, z: AISLE_START_Z - 35.0, speed: 0.55, dir: -1, opts: { shirt: '#8a5a2b', trousers: '#2b3038', height: 1.75 } },
+      { x: -1.50, z: AISLE_START_Z - 45.0, speed: 0.50, dir: 1, opts: { shirt: '#6f5a78', tunic: '#6f5a78', trousers: '#33383f', scarf: '#d8c390', height: 1.58, build: 'slim' } },
+    ];
+    cast.forEach((c) => {
+      const person = buildPerson(c.opts);
+      person.position.set(c.x, 0, c.z);
+      person.rotation.y = c.dir > 0 ? 0 : Math.PI;
+      aisle.add(person);
+      this.people.push({
+        group: person, x: c.x, z: c.z, speed: c.speed, dir: c.dir, person,
+        // each shopper works their own stretch of the aisle instead of the whole run
+        lo: Math.max(AISLE_END_Z + 2.0, c.z - 4.5),
+        hi: Math.min(AISLE_START_Z - 1.5, c.z + 4.5),
+      });
+    });
+    // one of ours on the floor, standing at the weigh counter with an apron on
+    const staffer = buildPerson({ shirt: '#f4f1e8', trousers: '#22262b', apron: '#0d6138', height: 1.64, build: 'slim' });
+    staffer.position.set(-0.55, 0, AISLE_END_Z + 2.1);
+    staffer.rotation.y = Math.PI * 0.94;
+    aisle.add(staffer);
+    this.people.push({ group: staffer, x: -0.55, z: AISLE_END_Z + 2.1, speed: 0, dir: 1, person: staffer });
+
     this.scene.add(aisle);
     this.aisleGroup = aisle;
     // the aisle runs toward -z, so walkMin is the far end and walkMax the mouth
@@ -1490,7 +1529,7 @@ export class ShopScene {
       const rapid = performance.now() - down.t < 420;
       if (!dragging && rapid) {
         const hit = this.pick(e.clientX, e.clientY);
-        if (hit) this.emit('pick', hit.userData.product);
+        if (hit) { this.emit('pick', hit.userData.product); beep('pick'); }
         else this.emit('pick', null);
       }
       down = null;
@@ -1558,6 +1597,7 @@ export class ShopScene {
         const f = this.walkHold || this.moveInput.f;
         if (f) {
           this.walk(f * dt * 2.6);
+          setWalkSpeed(2.6);
           this.emit('walk', this.walkTarget);
         }
         if (this.moveInput.s) {
@@ -1650,7 +1690,27 @@ export class ShopScene {
       this.camera.rotateY(this.yaw);
       this.camera.rotateX(this.pitch);
 
+      // wheels go quiet the moment you stop pushing
+      if (this.mode === 'aisle' && !this.walkHold && !this.moveInput.f) setWalkSpeed(0);
       this.updateTrolley(dt);
+      if (this.people) {
+        const zb0 = this.aisleBounds.end + 2.0;
+        const zb1 = this.aisleBounds.start - 1.0;
+        const now = performance.now() / 1000;
+        this.people.forEach((p) => {
+          if (p.speed === 0) {
+            p.person.userData.animate(now + p.x, 0);
+            return;
+          }
+          p.z += p.dir * p.speed * dt;
+          const lo = p.lo ?? zb0;
+          const hi = p.hi ?? zb1;
+          if (p.z < lo) { p.z = lo; p.dir = 1; p.group.rotation.y = 0; }
+          if (p.z > hi) { p.z = hi; p.dir = -1; p.group.rotation.y = Math.PI; }
+          p.group.position.z = p.z;
+          p.person.userData.animate(now + p.x * 3, 1);
+        });
+      }
 
       if (this.gradePass) this.gradePass.uniforms.uTime.value = now * 0.001;
       if (this.composer) this.composer.render();
