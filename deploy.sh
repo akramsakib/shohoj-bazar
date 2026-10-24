@@ -34,7 +34,7 @@ gh() { # gh METHOD PATH [BODY]
   fi
 }
 
-json() { node -e "let d='';process.stdin.on('data',c=>d+=c).on('end',()=>{try{console.log(eval('(JSON.parse(d))'+process.argv[1]))}catch(e){console.log('')}})" "$1"; }
+json() { node -e "let d='';process.stdin.on('data',c=>d+=c).on('end',()=>{try{const v=eval('(JSON.parse(d))'+process.argv[1]);console.log(v===undefined||v===null?'':v)}catch(e){console.log('')}})" "$1"; }
 
 # ---------- 0. verify the token ----------
 say "Checking the token"
