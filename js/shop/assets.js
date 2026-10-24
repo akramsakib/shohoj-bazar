@@ -31,10 +31,11 @@ function parseKg(weight) {
 
 /* Real-world footprint per package shape, derived from the pack weight. */
 function footprint(product) {
+  if (product.bulkDims) return product.bulkDims;   // floor sacks use real 25 kg proportions
   const kg = parseKg(product.weight);
   switch (product.shape) {
-    case 'sack':   return { w: 0.30, h: 0.40 + Math.min(kg, 10) * 0.006, d: 0.13, bulge: 0.045 };
-    case 'pouch':  return { w: 0.19 + Math.min(kg, 2) * 0.02, h: 0.27, d: 0.075, bulge: 0.022 };
+    case 'sack':   return { w: 0.26 + Math.min(kg, 10) * 0.012, h: 0.30 + Math.min(kg, 10) * 0.010, d: 0.19, bulge: 0.075 };
+    case 'pouch':  return { w: 0.19 + Math.min(kg, 2) * 0.02, h: 0.27, d: 0.10, bulge: 0.035 };
     case 'box':    return { w: 0.17, h: 0.23, d: 0.055, bulge: 0 };
     case 'bottle': return { r: 0.042, h: 0.29, d: 0.084, bulge: 0 };
     case 'jar':    return { r: 0.055, h: 0.12, d: 0.12, bulge: 0 };
@@ -61,62 +62,167 @@ function drawLabel(product, ctx, W, H) {
   ctx.fillStyle = a;
   ctx.fillRect(0, 0, W, H * 0.19);
   ctx.fillStyle = '#fff';
-  ctx.font = `800 ${H * 0.105}px Inter, Arial, sans-serif`;
   ctx.textBaseline = 'middle';
   ctx.textAlign = 'left';
-  ctx.fillText(String(product.brand || '').toUpperCase(), W * 0.07, H * 0.098);
+  // shave the brand until it clears the weight on the right of the band
+  const weightFont = `600 ${H * 0.072}px Inter, Arial, sans-serif`;
+  ctx.font = weightFont;
+  const weightW = ctx.measureText(product.weight || '').width;
+  const brandRoom = W * 0.86 - weightW - W * 0.06;
+  let brandSize = H * 0.105;
+  let brand = String(product.brand || '').toUpperCase();
+  ctx.font = `800 ${brandSize}px Inter, Arial, sans-serif`;
+  while (ctx.measureText(brand).width > brandRoom && brandSize > H * 0.045) {
+    brandSize -= 2;
+    ctx.font = `800 ${brandSize}px Inter, Arial, sans-serif`;
+  }
+  ctx.fillText(brand, W * 0.07, H * 0.098);
   ctx.textAlign = 'right';
-  ctx.font = `600 ${H * 0.072}px Inter, Arial, sans-serif`;
+  ctx.font = weightFont;
   ctx.fillText(product.weight || '', W * 0.93, H * 0.098);
 
   // product name
   ctx.textAlign = 'left';
   ctx.fillStyle = a;
   ctx.font = `800 ${H * 0.115}px Inter, Arial, sans-serif`;
-  const nameLines = wrap(ctx, product.name.toUpperCase(), W * 0.86);
-  nameLines.slice(0, 3).forEach((line, i) => {
-    ctx.fillText(line, W * 0.07, H * (0.32 + i * 0.125));
+  const hasWindow = product.shape === 'sack' || product.shape === 'pouch';
+  const nameCol = hasWindow ? W * 0.44 : W * 0.86;
+  const upper = product.name.toUpperCase();
+  let nameSize = H * 0.115;
+  let nameLines = wrap(ctx, upper, nameCol);
+  ctx.font = `800 ${nameSize}px Inter, Arial, sans-serif`;
+  while (nameLines.length > 2 && nameSize > H * 0.06) {
+    nameSize -= 2;
+    ctx.font = `800 ${nameSize}px Inter, Arial, sans-serif`;
+    nameLines = wrap(ctx, upper, nameCol);
+  }
+  nameLines.slice(0, 2).forEach((line, i) => {
+    const sz = fitFont(ctx, line, nameCol, nameSize);
+    ctx.font = `800 ${sz}px Inter, Arial, sans-serif`;
+    ctx.fillText(line, W * 0.07, H * (0.325 + i * 0.135));
   });
 
   // bangla name
   ctx.fillStyle = 'rgba(20,30,20,.82)';
   ctx.font = `600 ${H * 0.088}px "Noto Sans Bengali", "Hind Siliguri", "Nirmala UI", sans-serif`;
-  ctx.fillText(product.bn, W * 0.07, H * 0.66);
+  ctx.fillText(product.bn, W * 0.07, H * 0.685);
+
+  // clear window with real grain showing through
+  if (product.shape === 'sack' || product.shape === 'pouch') {
+    drawGrainWindow(ctx, product, W * 0.585, H * 0.235, W * 0.345, H * 0.44);
+  }
 
   // decorative rule
   ctx.strokeStyle = a;
   ctx.globalAlpha = 0.35;
   ctx.lineWidth = Math.max(1, H * 0.006);
   ctx.beginPath();
-  ctx.moveTo(W * 0.07, H * 0.73);
-  ctx.lineTo(W * 0.93, H * 0.73);
+  ctx.moveTo(W * 0.07, H * 0.755);
+  ctx.lineTo(W * 0.93, H * 0.755);
   ctx.stroke();
   ctx.globalAlpha = 1;
 
-  // claim line
-  ctx.fillStyle = 'rgba(20,30,20,.6)';
-  ctx.font = `500 ${H * 0.055}px Inter, Arial, sans-serif`;
-  ctx.fillText('Premium quality · selected for you', W * 0.07, H * 0.79);
+  // claim line, always inside the pack edge
+  const claim = product.claim || 'Premium quality · selected for you';
+  ctx.fillStyle = 'rgba(20,30,20,.62)';
+  fitFont(ctx, claim, W * 0.80, H * 0.052, 500);
+  ctx.textAlign = 'left';
+  ctx.fillText(claim, W * 0.07, H * 0.80);
 
   // fake barcode strip
   ctx.fillStyle = 'rgba(15,20,15,.85)';
   let x = W * 0.07;
-  while (x < W * 0.42) {
+  while (x < W * 0.40) {
     const bwd = 1 + Math.random() * 4;
-    ctx.fillRect(x, H * 0.85, bwd, H * 0.10);
+    ctx.fillRect(x, H * 0.86, bwd, H * 0.075);
     x += bwd + 1 + Math.random() * 3;
   }
+  ctx.fillStyle = 'rgba(20,30,20,.55)';
+  fitFont(ctx, 'Weight ' + (product.weight || ''), W * 0.30, H * 0.036, 600);
+  ctx.textAlign = 'left';
+  ctx.fillText('Weight ' + (product.weight || ''), W * 0.07, H * 0.965);
 
   // Shohoj Bazar seller mark
   ctx.fillStyle = a;
   ctx.globalAlpha = 0.9;
-  roundedRect(ctx, W * 0.58, H * 0.845, W * 0.35, H * 0.085, H * 0.02);
+  roundedRect(ctx, W * 0.56, H * 0.855, W * 0.37, H * 0.075, H * 0.02);
   ctx.fill();
   ctx.globalAlpha = 1;
   ctx.fillStyle = '#fff';
-  ctx.font = `700 ${H * 0.05}px Inter, Arial, sans-serif`;
+  fitFont(ctx, 'SHOHOJ BAZAR', W * 0.32, H * 0.046, 700);
   ctx.textAlign = 'center';
-  ctx.fillText('SHOHOJ BAZAR', W * 0.755, H * 0.887);
+  ctx.fillText('SHOHOJ BAZAR', W * 0.745, H * 0.893);
+}
+
+/* shrinks a font size until the string fits the given width */
+function fitFont(ctx, text, maxWidth, size, weight = 800, family = 'Inter, Arial, sans-serif') {
+  let s = size;
+  ctx.font = `${weight} ${s}px ${family}`;
+  while (ctx.measureText(text).width > maxWidth && s > 6) {
+    s -= 1;
+    ctx.font = `${weight} ${s}px ${family}`;
+  }
+  return s;
+}
+
+/* a heap of grain behind a clear pack window — what rice actually looks like */
+function drawGrainWindow(ctx, product, x, y, w, h) {
+  ctx.save();
+  roundedRect(ctx, x, y, w, h, h * 0.10);
+  ctx.clip();
+
+  // the inside of a rice bag is in shadow — grains only read against a darker base
+  const g = ctx.createLinearGradient(x, y, x, y + h);
+  g.addColorStop(0, 'rgba(150,128,88,.42)');
+  g.addColorStop(0.55, 'rgba(120,100,62,.50)');
+  g.addColorStop(1, 'rgba(88,72,42,.58)');
+  ctx.fillStyle = g;
+  ctx.fillRect(x, y, w, h);
+
+  const GRAIN = { rice: '#f0e7d3', dal: '#d9a441', flour: '#eae0c8' };
+  const base = product.grain || GRAIN[product.section] || '#efe6d2';
+  const grain = base;
+  const dark = product.section === 'dal' ? '#8a5c14' : '#b5a37a';
+  let seed = 7;
+  for (let i = 0; i < 620; i++) {
+    seed = (seed * 9301 + 49297) % 233280;
+    const r = seed / 233280;
+    const gx = x + ((r * 7.13) % 1) * w;
+    const gy = y + ((r * 3.71) % 1) * h;
+    const rot = r * Math.PI;
+    const len = h * (0.030 + (r % 0.022));
+    ctx.save();
+    ctx.translate(gx, gy);
+    ctx.rotate(rot);
+    ctx.beginPath();
+    ctx.ellipse(0, 0, len, len * 0.36, 0, 0, Math.PI * 2);
+    ctx.fillStyle = i % 4 === 0 ? dark : grain;
+    ctx.globalAlpha = 0.85 + (r % 0.15);
+    ctx.fill();
+    ctx.restore();
+  }
+  ctx.globalAlpha = 1;
+
+  // heap shading so the grains sit inside a bag, not on a flat card
+  const shade = ctx.createRadialGradient(x + w * 0.5, y + h * 0.15, h * 0.05, x + w * 0.5, y + h * 0.6, w * 0.9);
+  shade.addColorStop(0, 'rgba(255,255,255,.16)');
+  shade.addColorStop(1, 'rgba(40,32,18,.35)');
+  ctx.fillStyle = shade;
+  ctx.fillRect(x, y, w, h);
+
+  // glass highlight across the window
+  const glass = ctx.createLinearGradient(x, y, x + w, y + h);
+  glass.addColorStop(0, 'rgba(255,255,255,.20)');
+  glass.addColorStop(0.42, 'rgba(255,255,255,.02)');
+  glass.addColorStop(1, 'rgba(255,255,255,.10)');
+  ctx.fillStyle = glass;
+  ctx.fillRect(x, y, w, h);
+
+  ctx.strokeStyle = 'rgba(30,40,30,.28)';
+  ctx.lineWidth = Math.max(1.5, w * 0.012);
+  roundedRect(ctx, x + 1, y + 1, w - 2, h - 2, h * 0.10);
+  ctx.stroke();
+  ctx.restore();
 }
 
 function wrap(ctx, text, maxWidth) {
@@ -138,7 +244,7 @@ export function labelTexture(product, variant = 'front') {
   const key = product.id + ':' + variant;
   if (textureCache.has(key)) return textureCache.get(key);
 
-  const W = 512, H = 640;
+  const W = 384, H = 480;
   const canvas = document.createElement('canvas');
   canvas.width = W;
   canvas.height = H;
@@ -219,7 +325,9 @@ function contactShadow(width) {
 
 function materialsFor(product, sideColour) {
   const front = new THREE.MeshStandardMaterial({ map: labelTexture(product, 'front'), roughness: 0.72, metalness: 0.02 });
-  const back = new THREE.MeshStandardMaterial({ map: labelTexture(product, 'back'), roughness: 0.72, metalness: 0.02 });
+  // the back panel is only generated the first time a pack is picked up
+  const back = new THREE.MeshStandardMaterial({ color: new THREE.Color(product.colour), roughness: 0.75, metalness: 0.02 });
+  back.userData.lazyBack = product;
   const side = new THREE.MeshStandardMaterial({ color: new THREE.Color(sideColour || product.colour), roughness: 0.8, metalness: 0.02 });
   // BoxGeometry material order: +x, -x, +y, -y, +z, -z
   return [side, side, side, side, front, back];
@@ -338,4 +446,49 @@ export function priceTag(product) {
     tagMaterialCache.set(product.id, new THREE.MeshBasicMaterial({ map: priceTagTexture(product) }));
   }
   return new THREE.Mesh(new THREE.PlaneGeometry(0.185, 0.0925), tagMaterialCache.get(product.id));
+}
+
+
+/* Generated on first pick-up: the pack's back panel. */
+export function ensureBackTexture(mesh) {
+  mesh.traverse((o) => {
+    if (!o.isMesh || !o.material) return;
+    const mats = Array.isArray(o.material) ? o.material : [o.material];
+    mats.forEach((m) => {
+      if (!m.userData || !m.userData.lazyBack) return;
+      const p = m.userData.lazyBack;
+      m.map = labelTexture(p, 'back');
+      m.color.set('#ffffff');
+      m.needsUpdate = true;
+      delete m.userData.lazyBack;
+    });
+  });
+}
+
+/* Small "OFFER / BEST SELLER" card clipped to the shelf edge. */
+export function shelfTalker(product, text) {
+  const canvas = document.createElement('canvas');
+  canvas.width = 320;
+  canvas.height = 128;
+  const ctx = canvas.getContext('2d');
+  ctx.fillStyle = '#f47b20';
+  ctx.fillRect(0, 0, 320, 128);
+  ctx.fillStyle = 'rgba(255,255,255,.22)';
+  ctx.fillRect(0, 0, 320, 18);
+  ctx.fillStyle = '#fff';
+  ctx.font = '800 46px Inter, Arial, sans-serif';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(text, 160, 58);
+  ctx.font = '600 24px Inter, Arial, sans-serif';
+  ctx.globalAlpha = 0.92;
+  const nm = product.name.length > 20 ? product.name.slice(0, 19) + '…' : product.name;
+  ctx.fillText(nm, 160, 100);
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  const mesh = new THREE.Mesh(
+    new THREE.PlaneGeometry(0.2, 0.08),
+    new THREE.MeshBasicMaterial({ map: tex })
+  );
+  return mesh;
 }

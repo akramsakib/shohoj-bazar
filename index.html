@@ -23,7 +23,7 @@
     <div class="entry-mark">🛒</div>
     <h1>Shohoj Bazar</h1>
     <p class="entry-bn">সহজ বাজার — ভেতরে আসুন, বাজার করুন</p>
-    <p class="entry-sub">A super shop you can walk into. Aisle by aisle, shelf by shelf — pick things up, look at them, put them in your trolley.</p>
+    <p class="entry-sub">A super shop you can walk into. Aisle by aisle, shelf by shelf — pick things up, look at them, put them in your trolley.<br><span class="entry-dept" id="entryDept"></span></p>
     <div class="entry-actions">
       <button id="enterBtn" class="btn big">Enter the shop <span class="arrow">→</span></button>
       <a href="#quick" id="quickLink" class="btn ghost">I'm in a hurry</a>
@@ -69,7 +69,7 @@
 
 <!-- aisle strip -->
 <div id="aisleStrip" class="hidden">
-  <div class="aisle-name">Aisle 1 · <b data-i18n="aisle1">Rice &amp; Grains</b> <span class="aisle-bn">চাল ও দানা</span></div>
+  <div class="aisle-name">Aisle 1 · <b id="aisleSection">Rice</b> <span class="aisle-bn" id="aisleSectionBn">চাল</span></div>
   <div class="aisle-depth"><i id="depthBar"></i></div>
 </div>
 
@@ -102,9 +102,11 @@
     <dl class="inspect-facts">
       <div><dt>Unit</dt><dd id="iUnit"></dd></div>
       <div><dt>Rating</dt><dd id="iRating"></dd></div>
-      <div><dt>On the shelf</dt><dd id="iShelf"></dd></div>
       <div><dt>Sold</dt><dd id="iSold"></dd></div>
+      <div><dt>On the shelf</dt><dd id="iShelf"></dd></div>
     </dl>
+    <dl class="inspect-facts inspect-extra" id="iExtra"></dl>
+    <p class="inspect-cook" id="iCook"></p>
     <div class="inspect-hint" id="iHint">Drag to turn it · pinch or scroll to look closer</div>
     <button id="addBtn" class="btn big">Add to trolley <span id="iAddPrice"></span></button>
     <button class="btn ghost small" id="askBtn">Ask an assistant about this</button>

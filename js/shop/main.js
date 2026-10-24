@@ -1,7 +1,11 @@
 /* Shohoj Bazar — Section 1 glue: entries, HUD, pick-up flow, trolley, staff. */
 
-import { DEPARTMENTS, PRODUCTS, STAFF, money, ORDER_CONFIG } from './data.js';
+import { DEPARTMENT_INDEX, STAFF, money, ORDER_CONFIG } from './data.js';
+import { DEPARTMENTS, openDepartment, ALL_PRODUCTS, findProduct, sectionOf } from './departments/index.js';
 import { ShopScene } from './scene.js';
+
+const DEPT = openDepartment();          // the built, walkable department
+const PRODUCTS = ALL_PRODUCTS;          // every product in the shop (search/trolley)
 
 const $ = (sel) => document.querySelector(sel);
 const $$ = (sel) => Array.from(document.querySelectorAll(sel));
@@ -73,6 +77,12 @@ function renderTrolleyBadge() {
   count.textContent = items;
   count.classList.toggle('zero', items === 0);
   $('#trolleyTotal').textContent = money(subtotal);
+}
+
+function productMeta(p) {
+  const dept = DEPARTMENTS.find((d) => d.id === p.departmentId);
+  const sec = dept ? (dept.sections || []).find((x) => x.id === p.section) : null;
+  return { dept, sec };
 }
 
 function renderTrolley() {
@@ -148,17 +158,21 @@ function openPanel(id) {
 
 /* -------------------------------------------------------------------- map */
 function renderMap() {
-  $('#mapGrid').innerHTML = DEPARTMENTS.map((d) => `
-    <button class="dept ${d.aisle === 1 ? 'live' : 'locked'}" data-dept="${d.id}" ${d.aisle === 1 ? '' : 'disabled'}>
-      <span class="tag ${d.aisle === 1 ? '' : 'soon'}">${d.aisle === 1 ? 'OPEN' : 'SOON'}</span>
+  $('#mapGrid').innerHTML = DEPARTMENT_INDEX.map((d) => {
+    const built = d.built;
+    const sections = built && DEPT.sections ? DEPT.sections.map((s) => s.name).join(' · ') : '';
+    return `
+    <button class="dept ${built ? 'live' : 'locked'}" data-dept="${d.id}" ${built ? '' : 'disabled'}>
+      <span class="tag ${built ? '' : 'soon'}">${built ? 'OPEN' : 'SOON'}</span>
       <span class="ic">${d.icon}</span>
       <span class="nm">${d.en}</span>
       <span class="bn">${d.bn}</span>
-    </button>`).join('');
+      ${built ? `<span class="sec">${DEPT.products.length} products</span>` : ''}
+    </button>`;
+  }).join('');
 
-  $('#mapGrid').querySelectorAll('.dept.live').forEach((b) => {
-    b.onclick = () => { closeAll(); scene.walkToAisle(); toast('Aisle 1 · Rice & Grains'); };
-  });
+  const liveTile = $('#mapGrid').querySelector('.dept.live');
+  if (liveTile) liveTile.onclick = () => { closeAll(); scene.walkToAisle(); toast('Aisle 1 · ' + DEPT.name); };
 
   $('#mapStaff').innerHTML = STAFF.filter((s) => s.online).map((s) => `
     <button class="staff-chip" data-staff="${s.id}">
@@ -250,8 +264,22 @@ function openInspect(product) {
   $('#iBlurb').textContent = product.blurb;
   $('#iUnit').textContent = product.unit;
   $('#iRating').textContent = `${product.rating} / 5`;
-  $('#iShelf').textContent = 'Aisle 1 · shelf ' + (product.tier || 1);
-  $('#iSold').textContent = product.sold.toLocaleString() + ' sold';
+  const { dept, sec } = productMeta(product);
+  $('#iShelf').textContent = `${dept ? dept.name : ''}${sec ? ' · ' + sec.name : ''}`;
+  $('#iSold').textContent = (product.sold || 0).toLocaleString() + ' sold';
+  const extra = $('#iExtra');
+  if (extra) {
+    const rows = [];
+    if (product.brand) rows.push(['Brand', product.brand]);
+    if (product.origin) rows.push(['From', product.origin]);
+    if (product.grade) rows.push(['Type', product.grade]);
+    extra.innerHTML = rows.map(([k, v]) => `<div><dt>${k}</dt><dd>${v}</dd></div>`).join('');
+  }
+  const cook = $('#iCook');
+  if (cook) {
+    cook.innerHTML = product.cook ? `<b>How it's used:</b> ${product.cook}` : '';
+    cook.classList.toggle('hidden', !product.cook);
+  }
   $('#iAddPrice').textContent = '· ' + money(product.price);
   $('#iBadge').textContent = product.tier === 1 ? 'In your hand · full 3D' : 'In your hand';
   $('#iHint').textContent = product.tier === 1
@@ -288,7 +316,11 @@ function runSearch(q) {
   const term = q.trim().toLowerCase();
   if (!term) { box.classList.add('hidden'); return; }
   const hits = PRODUCTS.filter((p) =>
-    p.name.toLowerCase().includes(term) || p.bn.includes(term) || p.brand.toLowerCase().includes(term));
+    (p.name || '').toLowerCase().includes(term) ||
+    (p.bn || '').includes(term) ||
+    (p.brand || '').toLowerCase().includes(term) ||
+    (p.origin || '').toLowerCase().includes(term) ||
+    (p.grade || '').toLowerCase().includes(term));
   box.classList.remove('hidden');
   box.innerHTML = hits.length
     ? hits.slice(0, 6).map((p) => `
@@ -336,9 +368,11 @@ function boot() {
   renderQuick();
   renderTrolleyBadge();
   $('#entryStaff').textContent = STAFF.filter((s) => s.online).map((s) => s.name).join(', ');
+  const ed = $('#entryDept');
+  if (ed) ed.textContent = `Now open: Aisle 1 — ${DEPT.name} (${DEPT.nameBn}) · ${DEPT.products.length} products`;
 
   try {
-    scene = new ShopScene($('#shop'));
+    scene = new ShopScene($('#shop'), DEPT);
   } catch (err) {
     console.warn('WebGL unavailable, falling back to the fast shop', err);
     state.unsupported = true;
@@ -355,11 +389,22 @@ function boot() {
   });
 
   scene.on('walk', (z) => {
-    const pct = Math.min(100, Math.max(4, ((z + 5.2) / -17.3) * 100));
+    const b = scene.aisleBounds || { start: -9.5, end: -25 };
+    const pct = Math.min(100, Math.max(3, ((b.start - z) / (b.start - b.end)) * 100));
     $('#depthBar').style.width = pct + '%';
+    const sec = scene.sectionAt(z);
+    if (sec) {
+      const el = $('#aisleSection');
+      if (el && el.dataset.id !== sec.id) {
+        el.dataset.id = sec.id;
+        el.textContent = sec.name;
+        $('#aisleSectionBn').textContent = sec.nameBn || '';
+      }
+    }
   });
 
   window.__scene = scene; // handy for debugging the walk/pick flow in the console
+  window.__openInspect = (id) => openInspect(PRODUCTS.find((p) => p.id === id));
   setTimeout(() => $('#loader').classList.add('done'), 900);
 
   /* entry */

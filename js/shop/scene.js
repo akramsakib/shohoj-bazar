@@ -2,8 +2,7 @@
    One continuous WebGL scene. Camera "walks"; nothing reloads. */
 
 import * as THREE from '../../vendor/three.module.js';
-import { PRODUCTS, SHELF_PRODUCTS } from './data.js';
-import { buildProduct, priceTag } from './assets.js';
+import { buildProduct, priceTag, shelfTalker, ensureBackTexture } from './assets.js';
 
 const ease = (t) => (t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2);
 const lerp = (a, b, t) => a + (b - a) * t;
@@ -59,7 +58,7 @@ function signTexture(text, sub, bg = '#0a4a2c', fg = '#ffffff') {
 }
 
 export class ShopScene {
-  constructor(canvas) {
+  constructor(canvas, department) {
     this.canvas = canvas;
     this.prevTime = performance.now();
     this.mode = 'street';
@@ -74,7 +73,7 @@ export class ShopScene {
     this.initScene();
     this.buildStreet();
     this.buildInterior();
-    this.buildAisle();
+    this.buildAisle(department);
     this.setCameraVantage('street', true);
     this.bindInput();
     this.animate();
@@ -122,6 +121,11 @@ export class ShopScene {
     const key = new THREE.DirectionalLight(0xfff0d8, 0.85);
     key.position.set(4, 9, 4);
     this.scene.add(key);
+
+    // a soft light that switches on when you lift a pack into your hand
+    this.holdLight = new THREE.PointLight(0xfff4e2, 0, 2.6, 2);
+    this.holdLight.position.set(0, 1.8, 0);
+    this.scene.add(this.holdLight);
 
     // warm aisle lights, kept to three for the frame budget
     [-1.5, -6, -11, -16, -21].forEach((z, i) => {
@@ -396,110 +400,232 @@ export class ShopScene {
   }
 
   /* --------------------------------------------------------------- aisle */
-  buildAisle() {
+  /* Builds a walkable aisle from a department config. Nothing below is
+     rice-specific: bays, levels, facings, sections, bulk display and the
+     end cap all come from the department object. */
+  buildAisle(dept, quality) {
     const aisle = new THREE.Group();
-    aisle.name = 'aisle1';
+    aisle.name = 'aisle:' + dept.id;
+    this.dept = dept;
+    this.products = [];
 
     const shelfMat = new THREE.MeshStandardMaterial({ color: '#fbf8f1', roughness: 0.75 });
     const boardMat = new THREE.MeshStandardMaterial({ color: '#e6e0d2', roughness: 0.7 });
     const backMat = new THREE.MeshStandardMaterial({ color: '#cfd8cf', roughness: 0.95 });
 
-    const SHELF_W = 6.2;       // shelf run length along z
-    const SHELF_X = 2.0;       // distance from centre
-    const LEVELS = 4;
+    const BAY_W = 6.2;
+    const SHELF_X = 2.0;
+    const LEVELS = dept.layout.levels;
     const LEVEL_H = 0.52;
     const BASE_Y = 0.18;
+    const bays = dept.layout.bays;
+    const totalLen = bays * BAY_W;
+    const AISLE_START_Z = -9.5;
+    const AISLE_END_Z = AISLE_START_Z - totalLen;
+
+    this.aisleBounds = { start: AISLE_START_Z, end: AISLE_END_Z };
 
     for (const side of [-1, 1]) {
-      const group = new THREE.Group();
-      group.position.set(side * SHELF_X, 0, -9.5);
+      for (let bay = 0; bay < bays; bay++) {
+        const bayCentre = AISLE_START_Z - BAY_W / 2 - bay * BAY_W;
+        const group = new THREE.Group();
+        group.position.set(side * SHELF_X, 0, bayCentre);
 
-      // back panel
-      const back = new THREE.Mesh(new THREE.BoxGeometry(0.08, LEVELS * LEVEL_H + BASE_Y + 0.12, SHELF_W), backMat);
-      back.position.set(side * 0.3, (LEVELS * LEVEL_H + BASE_Y) / 2, 0);
-      group.add(back);
+        const back = new THREE.Mesh(new THREE.BoxGeometry(0.08, LEVELS * LEVEL_H + BASE_Y + 0.12, BAY_W), backMat);
+        back.position.set(side * 0.3, (LEVELS * LEVEL_H + BASE_Y) / 2, 0);
+        group.add(back);
 
-      // uprights
-      [-SHELF_W / 2, SHELF_W / 2].forEach((z) => {
-        const up = new THREE.Mesh(new THREE.BoxGeometry(0.56, LEVELS * LEVEL_H + BASE_Y + 0.5, 0.07), shelfMat);
-        up.position.set(0, (LEVELS * LEVEL_H + BASE_Y + 0.5) / 2, z);
-        group.add(up);
-      });
+        [-BAY_W / 2, BAY_W / 2].forEach((z) => {
+          const up = new THREE.Mesh(new THREE.BoxGeometry(0.56, LEVELS * LEVEL_H + BASE_Y + 0.5, 0.07), shelfMat);
+          up.position.set(0, (LEVELS * LEVEL_H + BASE_Y + 0.5) / 2, z);
+          group.add(up);
+        });
 
-      // shelf boards
-      for (let i = 0; i <= LEVELS; i++) {
-        const y = BASE_Y + i * LEVEL_H;
-        const board = new THREE.Mesh(new THREE.BoxGeometry(0.56, 0.045, SHELF_W), boardMat);
-        board.position.set(0, y, 0);
-        group.add(board);
+        for (let i = 0; i <= LEVELS; i++) {
+          const y = BASE_Y + i * LEVEL_H;
+          const board = new THREE.Mesh(new THREE.BoxGeometry(0.56, 0.045, BAY_W), boardMat);
+          board.position.set(0, y, 0);
+          group.add(board);
+          const rail = new THREE.Mesh(
+            new THREE.BoxGeometry(0.03, 0.075, BAY_W),
+            new THREE.MeshStandardMaterial({ color: '#f6f2e6', roughness: 0.6 })
+          );
+          rail.position.set(-side * 0.34, y + 0.045, 0);
+          group.add(rail);
+        }
 
-        // price rail on the shelf edge
-        const rail = new THREE.Mesh(
-          new THREE.BoxGeometry(0.03, 0.075, SHELF_W),
-          new THREE.MeshStandardMaterial({ color: '#f6f2e6', roughness: 0.6 })
+        /* department fascia + the section that owns this bay */
+        const section = (dept.sections || []).find((sec) => (sec.bays || []).includes(bay));
+        const fascia = new THREE.Mesh(
+          new THREE.PlaneGeometry(BAY_W, 0.34),
+          new THREE.MeshBasicMaterial({
+            map: signTexture(
+              (section ? section.name : dept.name).toUpperCase(),
+              section ? section.nameBn : dept.nameBn,
+              dept.accent || '#0d6138'
+            ),
+          })
         );
-        rail.position.set(-side * 0.34, y + 0.045, 0);
-        group.add(rail);
+        fascia.position.set(-side * 0.31, LEVELS * LEVEL_H + BASE_Y + 0.22, 0);
+        fascia.rotation.y = side > 0 ? -Math.PI / 2 : Math.PI / 2;
+        group.add(fascia);
+
+        aisle.add(group);
+        group.userData = { side, bay, section, BAY_W, LEVELS, LEVEL_H, BASE_Y };
+        (this.bayGroups = this.bayGroups || []).push(group);
       }
-
-      // fascia with department name
-      const fascia = new THREE.Mesh(
-        new THREE.PlaneGeometry(SHELF_W, 0.34),
-        new THREE.MeshBasicMaterial({ map: signTexture('RICE & GRAINS', 'চাল ও দানা', '#0d6138') })
-      );
-      fascia.position.set(-side * 0.31, LEVELS * LEVEL_H + BASE_Y + 0.22, 0);
-      fascia.rotation.y = side > 0 ? -Math.PI / 2 : Math.PI / 2;
-      group.add(fascia);
-
-      aisle.add(group);
-      group.userData = { side, SHELF_W, LEVELS, LEVEL_H, BASE_Y };
-      if (side < 0) this.shelfLeft = group; else this.shelfRight = group;
     }
 
-    // populate: a stocked aisle — many facings per level, both sides.
-    const perSide = Math.ceil(SHELF_PRODUCTS.length / 2);
+    /* ---- aisle walls + ceiling, so nothing floats in a void ---- */
+    const wallMat = new THREE.MeshStandardMaterial({ color: '#e9e3d3', roughness: 0.95 });
     [-1, 1].forEach((side) => {
-      const shelf = side < 0 ? this.shelfLeft : this.shelfRight;
-      const { SHELF_W, LEVELS, LEVEL_H, BASE_Y } = shelf.userData;
-      const FACINGS = 11;                       // per level, along the shelf
-      const STEP = SHELF_W / FACINGS;
-      let cursor = 0;
+      const wall = new THREE.Mesh(new THREE.BoxGeometry(0.12, 3.5, totalLen + 1.2), wallMat);
+      wall.position.set(side * 2.42, 1.75, AISLE_START_Z - totalLen / 2 + 0.3);
+      aisle.add(wall);
+    });
+    const ceil = new THREE.Mesh(
+      new THREE.BoxGeometry(4.9, 0.1, totalLen + 1.2),
+      new THREE.MeshStandardMaterial({ color: '#f1ebdc', roughness: 0.92 })
+    );
+    ceil.position.set(0, 3.5, AISLE_START_Z - totalLen / 2 + 0.3);
+    aisle.add(ceil);
 
-      for (let level = 0; level < LEVELS; level++) {
-        for (let f = 0; f < FACINGS; f++) {
-          const product = SHELF_PRODUCTS[((side < 0 ? 0 : perSide) + level * FACINGS + f) % SHELF_PRODUCTS.length];
-          const z = -SHELF_W / 2 + STEP / 2 + f * STEP;
+    /* ---- stock the shelves ---- */
+    const facings = this.portrait ? dept.layout.facings.mobile : dept.layout.facings.desktop;
+    const bySection = {};
+    dept.products.forEach((p) => { (bySection[p.section] = bySection[p.section] || []).push(p); });
 
-          const mesh = buildProduct(product, { shadow: false });
-          mesh.position.set(shelf.position.x + side * 0.02, BASE_Y + level * LEVEL_H + 0.045, -9.5 + z);
+    const talkerMap = {};
+    (dept.talkers || []).forEach((t) => { talkerMap[t.productId] = t.text; });
+
+    (this.bayGroups || []).forEach((group) => {
+      const { side, bay, section, BAY_W: BW, LEVELS: LV, LEVEL_H: LH, BASE_Y: BY } = group.userData;
+      const pool = (bySection[section ? section.id : dept.sections?.[0]?.id] || dept.products);
+      const STEP = BW / facings;
+      let n = 0;
+
+      for (let level = 0; level < LV; level++) {
+        for (let f = 0; f < facings; f++) {
+          const product = pool[n % pool.length];
+          n++;
+          const z = -BW / 2 + STEP / 2 + f * STEP;
+
+          const mesh = buildProduct(product, { shadow: level === 0 });
+          mesh.position.set(side * SHELF_X + side * 0.02, BY + level * LH + 0.045,
+            group.position.z + z);
           mesh.rotation.y = side < 0 ? Math.PI / 2 : -Math.PI / 2;
           aisle.add(mesh);
           this.products.push(mesh);
           mesh.userData.home = mesh.position.clone();
           mesh.userData.homeRot = mesh.rotation.clone();
 
-          // price tags on the two eye-level shelves only, to keep draw calls sane
           if (level <= 1) {
             const tag = priceTag(product);
-            tag.position.set(shelf.position.x - side * 0.30, BASE_Y + level * LEVEL_H + 0.075, -9.5 + z);
+            tag.position.set(side * SHELF_X - side * 0.30, BY + level * LH + 0.075, group.position.z + z);
             tag.rotation.y = side < 0 ? Math.PI / 2 : -Math.PI / 2;
             aisle.add(tag);
           }
-          cursor++;
+
+          const talkerText = talkerMap[product.id];
+          if (talkerText && level === 1 && f % 3 === 0) {
+            const t = shelfTalker(product, talkerText);
+            t.position.set(side * SHELF_X - side * 0.36, BY + level * LH + 0.19, group.position.z + z);
+            t.rotation.y = side < 0 ? Math.PI / 2 : -Math.PI / 2;
+            aisle.add(t);
+          }
         }
       }
     });
 
-    // end-cap gondola so the aisle has a visible end
+    /* ---- bulk display at the aisle mouth ---- */
+    this.bulkGroups = [];
+    if (dept.layout.bulkDisplay === 'sacks' && (dept.bulk || []).length) {
+      const pallet = new THREE.Mesh(
+        new THREE.BoxGeometry(0.95, 0.1, 1.7),
+        new THREE.MeshStandardMaterial({ color: '#7d5c34', roughness: 0.92 })
+      );
+      pallet.position.set(1.55, 0.05, AISLE_START_Z - 2.6);
+      aisle.add(pallet);
+
+      (dept.bulk || []).forEach((entry, i) => {
+        const product = dept.products.find((p) => p.id === entry.productId);
+        if (!product) return;
+        // a real 25 kg sack on the floor: 45 cm wide, 72 cm tall, leaning on a pallet
+        const sack = { ...product, shape: 'sack', bulkDims: { w: 0.42, h: 0.66, d: 0.20, bulge: 0.07 } };
+        const stack = new THREE.Group();
+        for (let c = 0; c < 2; c++) {
+          const m = buildProduct(sack, { shadow: c === 0 });
+          m.position.set(c === 0 ? -0.02 : 0.03, 0.10 + c * 0.64, c === 0 ? 0 : 0.02);
+          // sacks face the customer walking in, not the shelf
+          m.rotation.y = (c === 1 ? 0.10 : -0.06);
+          m.rotation.z = c === 1 ? 0.02 : 0;
+          stack.add(m);
+          this.products.push(m);
+          m.userData.home = m.position.clone();
+          m.userData.homeRot = m.rotation.clone();
+        }
+        stack.position.set(1.52, 0, AISLE_START_Z - 3.6 - i * 0.62);
+        aisle.add(stack);
+        this.bulkGroups.push(stack);
+      });
+    }
+
+    /* ---- end cap at the far end ---- */
+    if (dept.layout.endcap === 'weigh-counter') {
+      const counter = new THREE.Group();
+      const body = new THREE.Mesh(
+        new THREE.BoxGeometry(3.4, 0.95, 0.9),
+        new THREE.MeshStandardMaterial({ color: '#e8dfc9', roughness: 0.7 })
+      );
+      body.position.y = 0.48;
+      counter.add(body);
+      const top = new THREE.Mesh(
+        new THREE.BoxGeometry(3.6, 0.07, 1.0),
+        new THREE.MeshStandardMaterial({ color: '#2f5d45', roughness: 0.45 })
+      );
+      top.position.y = 0.98;
+      counter.add(top);
+      [-1.1, 0, 1.1].forEach((x, i) => {
+        const bin = new THREE.Mesh(
+          new THREE.CylinderGeometry(0.28, 0.24, 0.36, 18),
+          new THREE.MeshStandardMaterial({ color: ['#d8c9a3', '#e3d2a8', '#cfc09b'][i], roughness: 0.85 })
+        );
+        bin.position.set(x, 1.2, 0);
+        counter.add(bin);
+      });
+      const sign = new THREE.Mesh(
+        new THREE.PlaneGeometry(2.4, 0.4),
+        new THREE.MeshBasicMaterial({ map: signTexture('WEIGH & PACK', 'ওজন করে প্যাক', dept.accent || '#0d6138') })
+      );
+      sign.position.set(0, 1.75, 0.1);
+      counter.add(sign);
+      counter.position.set(0, 0, AISLE_END_Z + 1.2);
+      aisle.add(counter);
+    }
+
     const endcap = new THREE.Mesh(
       new THREE.BoxGeometry(4.2, 1.6, 0.7),
       new THREE.MeshStandardMaterial({ color: '#f2ede0', roughness: 0.8 })
     );
-    endcap.position.set(0, 0.8, -20);
+    endcap.position.set(0, 0.8, AISLE_END_Z - 0.6);
     aisle.add(endcap);
 
     this.scene.add(aisle);
     this.aisleGroup = aisle;
+    // the aisle runs toward -z, so walkMin is the far end and walkMax the mouth
+    this.walkMin = AISLE_END_Z + 2.6;
+    this.walkMax = AISLE_START_Z + 1.2;
+    this.aisleZ = AISLE_START_Z;
+    this.walkTarget = AISLE_START_Z;
+  }
+
+  /* Which section is the camera standing in? Drives the HUD label. */
+  sectionAt(z) {
+    if (!this.dept || !this.bayGroups) return null;
+    const BAY_W = this.bayGroups[0].userData.BAY_W;
+    const bay = Math.floor((this.aisleBounds.start - z) / BAY_W);
+    const g = this.bayGroups.find((b) => b.userData.bay === Math.max(0, bay));
+    return g ? g.userData.section : null;
   }
 
   /* -------------------------------------------------------------- camera */
@@ -508,6 +634,7 @@ export class ShopScene {
       street: { pos: new THREE.Vector3(0, 1.68, 15.4), look: new THREE.Vector3(0, 3.15, 5.2) },
       hall:   { pos: new THREE.Vector3(0, 1.6, 1.8),  look: new THREE.Vector3(0, 1.5, -9) },
       aisle:  { pos: new THREE.Vector3(0, 1.55, this.aisleZ), look: new THREE.Vector3(0, 1.3, this.aisleZ - 8) },
+
     };
   }
 
@@ -553,7 +680,7 @@ export class ShopScene {
   focusProduct(productId) {
     const mesh = this.products.find((m) => m.userData.product.id === productId);
     if (!mesh) return false;
-    this.aisleZ = THREE.MathUtils.clamp(mesh.position.z + 1.85, -22.5, -5.2);
+    this.aisleZ = THREE.MathUtils.clamp(mesh.position.z + 1.85, this.walkMin ?? -22.5, this.walkMax ?? -5.2);
     this.walkTarget = this.aisleZ;
     this.setCameraVantage('aisle');
     return true;
@@ -561,7 +688,8 @@ export class ShopScene {
 
   walk(delta) {
     if (this.mode !== 'aisle' || this.picked) return;
-    this.walkTarget = THREE.MathUtils.clamp(this.walkTarget + delta, -22.5, -5.2);
+    // delta is "metres forward", and forward is toward -z
+    this.walkTarget = THREE.MathUtils.clamp(this.walkTarget - delta, this.walkMin ?? -22.5, this.walkMax ?? -5.2);
   }
 
   /* ------------------------------------------------------------- picking */
@@ -585,6 +713,7 @@ export class ShopScene {
   /* Lift the pack out of the shelf and bring it in front of the camera. */
   inspect(productGroup) {
     this.picked = productGroup;
+    ensureBackTexture(productGroup);
     productGroup.traverse((o) => { if (o.userData.isContactShadow) o.visible = false; });
     this.userRotated = false;
     this.scene.traverse((o) => {
@@ -607,6 +736,7 @@ export class ShopScene {
     g.position.copy(this.inspectFrom.pos);
     g.rotation.copy(this.inspectFrom.rot);
     g.userData.inspectTarget = false;
+    g.userData.holdScale = undefined;
     g.traverse((o) => { if (o.userData.isContactShadow) o.visible = true; });
     this.picked = null;
   }
@@ -668,7 +798,7 @@ export class ShopScene {
       if (this.picked) return;
       if (this.mode !== 'aisle') return;
       e.preventDefault();
-      this.walk(e.deltaY * 0.0016);
+      this.walk(e.deltaY * 0.0055);
       this.emit('walk', this.walkTarget);
     }, { passive: false });
 
@@ -720,11 +850,26 @@ export class ShopScene {
       if (this.picked) {
         const dir = new THREE.Vector3();
         this.camera.getWorldDirection(dir);
+        const up = this.camera.up.clone().normalize();
+        const right = new THREE.Vector3().crossVectors(dir, up).normalize();
+        // on a desktop the info card sits on the right, so hold the pack left of centre
+        const DIST = this.portrait ? 1.30 : 1.12;
         const target = this.camera.position.clone()
-          .add(dir.multiplyScalar(1.75))
-          .add(new THREE.Vector3(0, 0.22, 0));
+          .add(dir.multiplyScalar(DIST))
+          .addScaledVector(right, this.portrait ? 0 : -0.34)
+          .addScaledVector(up, this.portrait ? 0.46 : 0.10);
+        this.holdLight.position.copy(target).add(new THREE.Vector3(0, 0.45, 0));
+        this.holdLight.intensity = lerp(this.holdLight.intensity, 2.6, 1 - Math.pow(0.01, dt));
         this.picked.position.lerp(target, 1 - Math.pow(0.0015, dt));
-        this.picked.scale.setScalar(lerp(this.picked.scale.x, 1.15, 1 - Math.pow(0.01, dt)));
+        if (this.picked.userData.holdScale === undefined) {
+          // size the pack so it fills the same slice of the screen whatever it weighs
+          const box = new THREE.Box3().setFromObject(this.picked);
+          const h = Math.max(box.max.y - box.min.y, 0.10);
+          const frameH = 2 * DIST * Math.tan(THREE.MathUtils.degToRad(this.camera.fov) / 2);
+          this.picked.userData.holdScale = THREE.MathUtils.clamp((frameH * (this.portrait ? 0.22 : 0.36)) / h, 0.5, 2.6);
+        }
+        const hs = this.picked.userData.holdScale;
+        this.picked.scale.setScalar(lerp(this.picked.scale.x, hs, 1 - Math.pow(0.01, dt)));
         if (!this.userRotated) {
           this.picked.rotation.x = lerp(this.picked.rotation.x, 0, 1 - Math.pow(0.005, dt));
           let ry = this.picked.rotation.y % (Math.PI * 2);
@@ -733,6 +878,9 @@ export class ShopScene {
           this.picked.rotation.y = lerp(ry, 0, 1 - Math.pow(0.005, dt));
         }
       } else {
+        if (this.holdLight && this.holdLight.intensity > 0.01) {
+          this.holdLight.intensity = lerp(this.holdLight.intensity, 0, 1 - Math.pow(0.01, dt));
+        }
         this.products.forEach((p) => {
           if (p.scale.x !== 1) p.scale.setScalar(lerp(p.scale.x, 1, 1 - Math.pow(0.01, dt)));
         });

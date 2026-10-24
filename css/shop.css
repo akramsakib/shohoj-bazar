@@ -331,7 +331,13 @@ input { font: inherit; }
   .quick-grid { grid-template-columns: repeat(2, 1fr); }
   .drawer { inset: auto 0 0 0; top: auto; height: 78vh; border-radius: 20px 20px 0 0; width: 100%; }
   .inspect { bottom: 0; width: 100%; }
-  .inspect-card { border-radius: 20px 20px 0 0; padding: 16px 18px 22px; }
+  .inspect-card {
+    border-radius: 20px 20px 0 0; padding: 14px 16px 18px;
+    max-height: 48vh; overflow-y: auto;
+  }
+  .inspect-blurb { margin: 6px 0 9px; }
+  .inspect-facts { gap: 6px 10px; margin-bottom: 9px; }
+  .inspect-cook { margin-bottom: 9px; }
   .inspect-card h2 { font-size: 1.15rem; }
   .inspect-facts { grid-template-columns: 1fr 1fr; }
   #aisleStrip { bottom: 10px; font-size: .74rem; }
@@ -358,4 +364,39 @@ input { font: inherit; }
   .aisle-depth { width: 56px; }
   #walkHint { bottom: 62px; }
   .hud-search input { font-size: .82rem; padding: 10px 14px; }
+}
+
+/* ---------- department / section detail ---------- */
+.map-grid .dept .sec {
+  display: block; font-size: .62rem; color: var(--green-700); font-weight: 700; margin-top: 4px;
+}
+.inspect-extra { margin-top: -4px; padding-top: 8px; border-top: 1px solid var(--line); }
+.inspect-cook {
+  font-size: .78rem; line-height: 1.5; color: var(--ink-2);
+  background: #f4f8f4; border-left: 3px solid var(--green-500);
+  padding: 8px 11px; border-radius: 0 8px 8px 0; margin: 0 0 12px;
+}
+.inspect-cook b { color: var(--green-800); }
+.inspect-card { max-height: 76vh; overflow-y: auto; }
+.entry-dept { font-size: .85rem; color: #ffe0a8; font-weight: 600; }
+
+/* ---------- inspection: card docks right, pack floats in your hand ---------- */
+@media (min-width: 861px) {
+  .inspect {
+    left: auto; right: 26px; top: 92px; bottom: auto;
+    transform: none; width: 404px;
+  }
+  .inspect-nav { justify-content: flex-end; }
+  .inspect-card { max-height: calc(100vh - 190px); }
+}
+
+/* phone: keep the inspection sheet short so the pack stays in view */
+@media (max-width: 860px) {
+  .inspect-card { max-height: 46vh; overflow-y: auto; padding: 12px 15px 16px; }
+  .inspect-card h2 { font-size: 1.08rem; margin-bottom: 0; }
+  .inspect-price { font-size: 1.45rem; }
+  .inspect-blurb { font-size: .8rem; margin: 5px 0 8px; }
+  .inspect-facts { grid-template-columns: 1fr 1fr; gap: 5px 10px; margin-bottom: 8px; }
+  .inspect-cook { font-size: .74rem; padding: 6px 9px; margin-bottom: 8px; }
+  .inspect-hint { display: none; }
 }
