@@ -205,21 +205,13 @@ function startTill() {
     $('#tillScanned').textContent = money(TILL.total);
     $('#tillBar').style.width = Math.round((n / totalQty) * 100) + '%';
     $$('#tillList .till-line').forEach((row, i) => row.classList.toggle('scanned', i < n));
+    if (n >= totalQty) $('#tillHint').textContent = 'All scanned. Sadia is bagging it for you.';
   };
   if (TILL.poller) clearInterval(TILL.poller);
   TILL.poller = setInterval(syncTill, 180);
 
-  scene.startCheckout(lines, (meta) => {
-      // light up the next pack in the list, as if it just went over the glass
-      const rows = $$('#tillList .till-line:not(.scanned)');
-      const row = rows[0];
-      if (row) row.classList.add('scanned');
-      TILL.scanned += 1;
-      TILL.total += meta.price;
-      const totalQty = lines.reduce((a, l) => a + l.qty, 0);
-      $('#tillCount').textContent = `${TILL.scanned} of ${totalQty} items`;
-      $('#tillScanned').textContent = money(TILL.total);
-      $('#tillBar').style.width = Math.round((TILL.scanned / totalQty) * 100) + '%';
+  scene.startCheckout(lines, () => {
+      // the belt state drives the panel (see syncTill); nothing to do here
     }, null, () => {
       // everything has been read — now the money
       TILL.running = false;
