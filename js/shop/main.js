@@ -130,9 +130,7 @@ function renderTrolley() {
     <button class="btn big" id="checkoutBtn" style="width:100%;margin-top:12px">Go to checkout →</button>
     <div style="font-size:.72rem;color:var(--muted);text-align:center;margin-top:9px">Pay online — bKash, Nagad, Rocket or card. No cash on delivery.</div>`;
 
-  $('#checkoutBtn').onclick = () => {
-    toast('The checkout counter is Section 3 — this trolley will walk straight into it.');
-  };
+  $('#checkoutBtn').onclick = () => { closeAll(); startTill(); };
 }
 function findQty(id) {
   const line = state.trolley.find((l) => l.id === String(id));
@@ -141,6 +139,152 @@ function findQty(id) {
 function emojiFor(p) {
   const map = { rice: '🍚', oil: '🫗', spices: '🌶️', pulses: '🫘', veg: '🥬', fruit: '🍎', protein: '🐟', dairy: '🥛', bakery: '🍞', snacks: '🍪', care: '🧼', home: '🧹' };
   return map[p.dept] || '🛒';
+}
+
+/* --------------------------------------------------------------- checkout */
+const TILL = {
+  method: 'bkash',
+  lines: [],
+  scanned: 0,
+  total: 0,
+  orderId: null,
+  running: false,
+};
+const PAY_LABEL = {
+  bkash: { label: 'bKash number', ph: '01XXXXXXXXX', len: 11 },
+  nagad: { label: 'Nagad number', ph: '01XXXXXXXXX', len: 11 },
+  rocket: { label: 'Rocket account', ph: '01XXXXXXXXX-1', len: 12 },
+  card: { label: 'Card number', ph: '4242 4242 4242 4242', len: 19 },
+};
+
+function tillAmount() {
+  const { subtotal } = trolleyTotals();
+  const delivery = subtotal >= ORDER_CONFIG.freeDeliveryOver ? 0 : ORDER_CONFIG.delivery.Dhaka;
+  return { subtotal, delivery, total: subtotal + delivery };
+}
+
+function startTill() {
+  if (!scene) return;
+  const lines = trolleyLines();
+  if (!lines.length) { toast('Your trolley is empty.'); return; }
+  if (TILL.running) return;
+
+  TILL.lines = lines;
+  TILL.scanned = 0;
+  TILL.total = 0;
+  TILL.orderId = null;
+  TILL.running = true;
+
+  $('#till').classList.remove('hidden');
+  $('#hud').classList.add('till-open');
+  $('#payBox').classList.add('hidden');
+  $('#doneBox').classList.add('hidden');
+  $('#tillHint').textContent = 'Put your things on the belt…';
+  $('#tillBar').style.width = '0%';
+  $('#tillCount').textContent = '0 items';
+  $('#tillScanned').textContent = money(0);
+  $('#tillList').innerHTML = lines.map((l) => `
+    <div class="till-line" data-id="${l.id}">
+      <div class="em">${emojiFor(l.product)}</div>
+      <div class="nm">${state.lang === 'bn' ? l.product.bn : l.product.name}
+        <div style="font-size:.72rem;opacity:.6">${l.product.unit} × ${l.qty}</div></div>
+      <div class="pr">${money(l.product.price * l.qty)}</div>
+    </div>`).join('');
+
+  scene.goToCheckout();
+  setTimeout(() => {
+    scene.startCheckout(lines, (meta) => {
+      // light up the next pack in the list, as if it just went over the glass
+      const rows = $$('#tillList .till-line:not(.scanned)');
+      const row = rows[0];
+      if (row) row.classList.add('scanned');
+      TILL.scanned += 1;
+      TILL.total += meta.price;
+      const totalQty = lines.reduce((a, l) => a + l.qty, 0);
+      $('#tillCount').textContent = `${TILL.scanned} of ${totalQty} items`;
+      $('#tillScanned').textContent = money(TILL.total);
+      $('#tillBar').style.width = Math.round((TILL.scanned / totalQty) * 100) + '%';
+    }, null, () => {
+      // everything has been read — now the money
+      TILL.running = false;
+      $('#tillHint').textContent = 'All scanned. Sadia has bagged it for you.';
+      const { total } = tillAmount();
+      $('#payAmount').textContent = money(total);
+      $('#payBox').classList.remove('hidden');
+      refreshPayState();
+    });
+  }, 1700);
+}
+
+function refreshPayState() {
+  const v = ($('#payField').value || '').replace(/\s/g, '');
+  const spec = PAY_LABEL[TILL.method];
+  const ok = TILL.method === 'card' ? v.replace(/\D/g, '').length >= 15 : v.length >= spec.len;
+  $('#payBtn').disabled = !ok;
+}
+
+function setPayMethod(m) {
+  TILL.method = m;
+  $$('#payMethods .pay-m').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.pay === m)));
+  const spec = PAY_LABEL[m];
+  $('#payFieldLabel').textContent = spec.label;
+  $('#payField').placeholder = spec.ph;
+  $('#payField').value = '';
+  refreshPayState();
+}
+
+function payNow() {
+  const btn = $('#payBtn');
+  btn.disabled = true;
+  btn.textContent = 'Talking to ' + (TILL.method === 'card' ? 'the bank' : TILL.method.charAt(0).toUpperCase() + TILL.method.slice(1)) + '…';
+  $('#payBox').classList.add('processing');
+  setTimeout(() => {
+    const { subtotal, delivery, total } = tillAmount();
+    const id = 'SB' + Date.now().toString(36).toUpperCase().slice(-6);
+    TILL.orderId = id;
+    const stamp = new Date().toLocaleString('en-BD', { dateStyle: 'medium', timeStyle: 'short' });
+    const itemLines = TILL.lines.map((l) => {
+      const nm = l.product.name.padEnd(22, ' ');
+      return `${nm}${String(l.qty).padStart(2)} × ${String(l.product.price).padStart(4)} = ${String(l.product.price * l.qty).padStart(5)}`;
+    }).join('\n');
+    $('#receipt').textContent =
+`SHOHOJ BAZAR
+Mirpur 10, Dhaka · 09612-334455
+==================================
+Order   ${id}
+Till    1 · Sadia
+Date    ${stamp}
+==================================
+${itemLines}
+----------------------------------
+Subtotal            ${money(subtotal)}
+Delivery            ${delivery ? money(delivery) : 'Free'}
+VAT (included)      ${money(Math.round(subtotal * 0.05))}
+----------------------------------
+PAID                ${money(total)}
+via ${TILL.method.toUpperCase()} · ${$('#payField').value}
+==================================
+Thank you — come again.
+Return within 7 days with this slip.`;
+
+    $('#doneSub').textContent = `${money(total)} paid by ${TILL.method.toUpperCase()}. Order ${id} is with the packing team.`;
+    $('#payBox').classList.add('hidden');
+    $('#doneBox').classList.remove('hidden');
+
+    // the trolley is empty again
+    state.trolley = [];
+    saveTrolley();
+    renderTrolley();
+    renderTrolleyBadge();
+    toast('Payment received — order ' + id + ' confirmed.');
+  }, 1900);
+}
+
+function closeTill() {
+  $('#till').classList.add('hidden');
+  $('#hud').classList.remove('till-open');
+  TILL.running = false;
+  if (scene) scene.setCameraVantage('aisle');
 }
 
 /* ----------------------------------------------------------------- panels */
@@ -364,8 +508,27 @@ function renderQuick() {
 
 /* ------------------------------------------------------------------- boot */
 let scene = null;
+
+function wireTill() {
+  $$('#payMethods .pay-m').forEach((b) => { b.onclick = () => setPayMethod(b.dataset.pay); });
+  $('#payField').addEventListener('input', refreshPayState);
+  $('#payBtn').onclick = payNow;
+  $('#tillClose').onclick = closeTill;
+  $('#tillFinished').onclick = () => { closeTill(); toast('Thanks — Sadia is back at the till whenever you are.'); };
+  $('#receiptBtn').onclick = () => {
+    const w = window.open('', '_blank', 'width=420,height=640');
+    if (!w) { toast('Allow pop-ups to print the receipt.'); return; }
+    w.document.write(`<pre style="font:12px/1.5 ui-monospace,monospace;padding:18px">${$('#receipt').textContent.replace(/</g, '&lt;')}</pre>`);
+    w.document.close();
+    w.focus();
+    w.print();
+  };
+  setPayMethod('bkash');
+}
+
 function boot() {
   applyLang();
+  wireTill();
   renderMap();
   renderStaff();
   renderQuick();

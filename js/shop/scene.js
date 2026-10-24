@@ -10,6 +10,7 @@ import { ShaderPass } from '../../vendor/jsm/postprocessing/ShaderPass.js';
 import { OutputPass } from '../../vendor/jsm/postprocessing/OutputPass.js';
 import { buildProduct, priceTag, shelfTalker, ensureBackTexture, glowTexture, pbrSet } from './assets.js';
 import { buildPerson } from './people.js';
+import { buildCheckoutLane } from './checkout.js';
 import { initShopSound, setWalkSpeed, beep, announce } from './sound.js';
 
 const ease = (t) => (t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2);
@@ -1144,6 +1145,76 @@ export class ShopScene {
     aisle.add(staffer);
     this.people.push({ group: staffer, x: -0.55, z: AISLE_END_Z + 2.1, speed: 0, dir: 1, person: staffer });
 
+    /* ---- checkout hall at the end of the run ---- */
+    const CZ = AISLE_END_Z - 4.4;
+    this.checkoutZ = CZ;
+    const hallFloor = new THREE.Mesh(
+      new THREE.PlaneGeometry(9.0, 9.0),
+      new THREE.MeshPhysicalMaterial({
+        ...pbrSet('terrazzo_tiles', [3, 3]),
+        roughness: 0.72, metalness: 0.02, clearcoat: 0.85, clearcoatRoughness: 0.12,
+        color: '#ffffff', envMapIntensity: 1.35,
+      })
+    );
+    hallFloor.rotation.x = -Math.PI / 2;
+    hallFloor.position.set(0, 0.001, CZ - 1.5);
+    hallFloor.receiveShadow = true;
+    aisle.add(hallFloor);
+
+    const hallCeil = new THREE.Mesh(
+      new THREE.BoxGeometry(9.0, 0.1, 9.0),
+      new THREE.MeshStandardMaterial({ color: '#f1ebdc', roughness: 0.92 })
+    );
+    hallCeil.position.set(0, 3.5, CZ - 1.5);
+    aisle.add(hallCeil);
+    const hallWall = new THREE.Mesh(
+      new THREE.BoxGeometry(9.0, 3.5, 0.12),
+      new THREE.MeshStandardMaterial({ color: '#d3dbd2', roughness: 0.95 })
+    );
+    hallWall.position.set(0, 1.75, CZ - 5.6);
+    aisle.add(hallWall);
+
+    // the big "CHECKOUT" board you can read from halfway down the aisle
+    const coSign = new THREE.Mesh(
+      new THREE.PlaneGeometry(3.4, 0.62),
+      new THREE.MeshBasicMaterial({ map: signTexture('CHECKOUT', 'চেকআউট · পেমেন্ট', '#c1121f') })
+    );
+    coSign.position.set(0, 2.05, CZ - 5.52);
+    aisle.add(coSign);
+    const wallBand = new THREE.Mesh(
+      new THREE.BoxGeometry(9.0, 0.34, 0.06),
+      new THREE.MeshStandardMaterial({ color: '#0d6138', roughness: 0.6 })
+    );
+    wallBand.position.set(0, 0.42, CZ - 5.53);
+    aisle.add(wallBand);
+    const wallBand2 = new THREE.Mesh(
+      new THREE.BoxGeometry(9.0, 0.10, 0.06),
+      new THREE.MeshStandardMaterial({ color: '#c1121f', roughness: 0.6 })
+    );
+    wallBand2.position.set(0, 0.66, CZ - 5.53);
+    aisle.add(wallBand2);
+
+    [-2.6, 2.6].forEach((lx) => {
+      const lamp = new THREE.PointLight(0xfff0d2, 2.4, 11, 2);
+      lamp.position.set(lx, 3.05, CZ - 0.6);
+      lamp.userData.baseIntensity = 2.4;
+      aisle.add(lamp);
+    });
+    for (let i = 0; i < 2; i++) {
+      const housing = new THREE.Mesh(new THREE.BoxGeometry(2.4, 0.09, 0.30), new THREE.MeshStandardMaterial({ color: '#d9dbd4', roughness: 0.5, metalness: 0.4 }));
+      housing.position.set(0, 3.24, CZ - 1.5 - i * 2.4);
+      aisle.add(housing);
+      const tube = new THREE.Mesh(new THREE.PlaneGeometry(2.2, 0.20), new THREE.MeshBasicMaterial({ color: '#fffdf4' }));
+      tube.rotation.x = Math.PI / 2;
+      tube.position.set(0, 3.19, CZ - 1.5 - i * 2.4);
+      aisle.add(tube);
+    }
+
+    this.checkout = buildCheckoutLane(CZ, 0);
+    aisle.add(this.checkout.group);
+    this.checkoutQueue = [];
+    this.checkoutTimer = 0;
+
     this.scene.add(aisle);
     this.aisleGroup = aisle;
     // the aisle runs toward -z, so walkMin is the far end and walkMax the mouth
@@ -1310,6 +1381,14 @@ export class ShopScene {
 
   updateTrolley(dt) {
     if (!this.trolley || !this.trolley.visible) return;
+    if (this.mode === 'checkout') {
+      // parked beside the belt, exactly where you would leave it
+      const parked = new THREE.Vector3(1.55, 0, (this.checkoutZ || -30) + 1.35);
+      this.trolley.position.lerp(parked, Math.min(1, dt * 8));
+      this.trolley.rotation.y = Math.PI * 0.78;
+      this.trolley.position.y = 0;
+      return;
+    }
     const cam = this.camera;
     const fwd = new THREE.Vector3();
     cam.getWorldDirection(fwd);
@@ -1338,12 +1417,78 @@ export class ShopScene {
     this.trolley.position.y = moving ? Math.sin(performance.now() * 0.012) * 0.006 : 0;
   }
 
+  /* ------------------------------------------------------------ checkout */
+  goToCheckout() {
+    this.setCameraVantage('checkout');
+    this.checkout && this.checkout.reset();
+    this.checkoutQueue = [];
+    this.checkoutRunning = false;
+  }
+
+  /** lines: [{product, qty}] — puts them on the belt one at a time */
+  startCheckout(lines, onScanned, onDone, onAll) {
+    if (!this.checkout) return;
+    this.checkout.reset();
+    const queue = [];
+    lines.forEach((l) => {
+      for (let i = 0; i < l.qty; i++) queue.push(l.product);
+    });
+    this.checkoutQueue = queue;
+    this.checkoutOnScanned = onScanned;
+    this.checkoutOnDone = onDone;
+    this.checkoutOnAll = onAll;
+    this.checkoutTimer = 0.5;
+    this.checkoutRunning = true;
+    this.checkoutEmptyAt = null;
+  }
+
+  updateCheckout(dt) {
+    if (!this.checkout) return;
+    const scanned = this.checkout.update(dt, (meta) => {
+      beep('scan');
+      if (this.checkoutOnScanned) this.checkoutOnScanned(meta);
+    });
+
+    if (!this.checkoutRunning) return;
+
+    if (this.checkoutQueue.length) {
+      this.checkoutTimer -= dt;
+      if (this.checkoutTimer <= 0) {
+        const product = this.checkoutQueue.shift();
+        const pack = buildProduct(product, { shadow: false });
+        const box = new THREE.Box3().setFromObject(pack);
+        const size = new THREE.Vector3();
+        box.getSize(size);
+        const k = Math.min(0.34 / Math.max(size.x, size.y, size.z), 1.4);
+        pack.scale.setScalar(k);
+        this.checkout.load(pack, {
+          name: product.name, price: Math.round(product.price), unit: product.unit,
+        });
+        this.checkoutTimer = 0.85;
+        if (!this.checkoutQueue.length) this.checkoutEmptyAt = null;
+      }
+    } else if (scanned && this.checkoutEmptyAt === null) {
+      // last pack just went through the scanner
+      this.checkoutEmptyAt = 0.9;
+    }
+
+    if (this.checkoutEmptyAt !== null) {
+      this.checkoutEmptyAt -= dt;
+      if (this.checkoutEmptyAt <= 0) {
+        this.checkoutRunning = false;
+        this.checkoutEmptyAt = null;
+        if (this.checkoutOnAll) this.checkoutOnAll();
+      }
+    }
+  }
+
   /* -------------------------------------------------------------- camera */
   vantages() {
     return {
       street: { pos: new THREE.Vector3(0, 1.68, 15.4), look: new THREE.Vector3(0, 3.15, 5.2) },
       hall:   { pos: new THREE.Vector3(0, 1.6, 1.8),  look: new THREE.Vector3(0, 1.5, -9) },
       aisle:  { pos: new THREE.Vector3(0, 1.55, this.aisleZ), look: new THREE.Vector3(0, 1.3, this.aisleZ - 8) },
+      checkout: { pos: new THREE.Vector3(0.15, 1.68, (this.checkoutZ || -30) + 3.5), look: new THREE.Vector3(0.30, 1.00, (this.checkoutZ || -30) + 0.2) },
 
     };
   }
@@ -1369,6 +1514,7 @@ export class ShopScene {
       to: v.pos.clone(),
       lookFrom: this.lookTarget.clone(),
       lookTo: v.look.clone(),
+      start: performance.now(),
       t: 0,
       dur: 1.5,
     };
@@ -1584,8 +1730,9 @@ export class ShopScene {
 
       // camera tween
       if (this.tween) {
-        this.tween.t += dt / this.tween.dur;
-        const t = Math.min(this.tween.t, 1);
+        // wall-clock, not frame count: a slow machine must not crawl there
+        this.tween.t = (now - (this.tween.start || now)) / (this.tween.dur * 1000);
+        const t = Math.min(Math.max(this.tween.t, 0), 1);
         const e = ease(t);
         this.camera.position.lerpVectors(this.tween.from, this.tween.to, e);
         this.lookTarget.lerpVectors(this.tween.lookFrom, this.tween.lookTo, e);
@@ -1690,6 +1837,7 @@ export class ShopScene {
       this.camera.rotateY(this.yaw);
       this.camera.rotateX(this.pitch);
 
+      if (this.mode === 'checkout') this.updateCheckout(dt);
       // wheels go quiet the moment you stop pushing
       if (this.mode === 'aisle' && !this.walkHold && !this.moveInput.f) setWalkSpeed(0);
       this.updateTrolley(dt);

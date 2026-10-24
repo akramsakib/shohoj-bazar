@@ -168,6 +168,54 @@
   <div id="quickGrid" class="quick-grid"></div>
 </section>
 
+<!-- =============== CHECKOUT — the till at the end of the run =============== -->
+<section id="till" class="till hidden" aria-modal="true" role="dialog">
+  <div class="till-panel">
+    <div class="till-head">
+      <div>
+        <div class="till-lane">Lane 1 · <b>Sadia</b> on the till</div>
+        <h2>Checking you out</h2>
+      </div>
+      <button class="close" id="tillClose">✕</button>
+    </div>
+
+    <div class="till-screen">
+      <div class="till-screen-row"><span id="tillCount">0 items</span><span id="tillScanned">৳0</span></div>
+      <div class="till-progress"><i id="tillBar"></i></div>
+      <p class="till-hint" id="tillHint">Put your things on the belt…</p>
+    </div>
+
+    <div class="till-list" id="tillList"></div>
+
+    <div class="pay-box" id="payBox">
+      <h3>Pay online</h3>
+      <p class="pay-note">No cash on delivery. Choose how you want to pay.</p>
+      <div class="pay-methods" id="payMethods">
+        <button data-pay="bkash" class="pay-m"><b>bKash</b><span>017•••••</span></button>
+        <button data-pay="nagad" class="pay-m"><b>Nagad</b><span>01••••••</span></button>
+        <button data-pay="rocket" class="pay-m"><b>Rocket</b><span>017•••••</span></button>
+        <button data-pay="card" class="pay-m"><b>Card</b><span>Visa / Master</span></button>
+      </div>
+      <div class="pay-form">
+        <label id="payFieldLabel">bKash number</label>
+        <input id="payField" inputmode="tel" placeholder="01XXXXXXXXX" autocomplete="off" />
+        <div class="pay-amount" id="payAmount">৳0</div>
+        <button class="btn big" id="payBtn" disabled>Pay now</button>
+        <p class="pay-fine">Test mode — no money moves. Live payments go through SSLCommerz once the merchant account is connected.</p>
+      </div>
+    </div>
+
+    <div class="done-box hidden" id="doneBox">
+      <div class="done-tick">✓</div>
+      <h3 id="doneTitle">Payment received</h3>
+      <p id="doneSub"></p>
+      <div class="receipt" id="receipt"></div>
+      <button class="btn big" id="receiptBtn">Print / save receipt</button>
+      <button class="btn ghost" id="tillFinished">Done — back into the shop</button>
+    </div>
+  </div>
+</section>
+
 <div id="scrim" class="hidden"></div>
 <div id="toast" class="toast hidden"></div>
 <div id="loader">
