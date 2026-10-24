@@ -11,6 +11,7 @@ import { OutputPass } from '../../vendor/jsm/postprocessing/OutputPass.js';
 import { buildProduct, priceTag, shelfTalker, ensureBackTexture, glowTexture, pbrSet } from './assets.js';
 import { buildPerson } from './people.js';
 import { buildCheckoutLane } from './checkout.js';
+import { mergeGeometries } from '../../vendor/jsm/utils/BufferGeometryUtils.js';
 import { initShopSound, setWalkSpeed, beep, announce } from './sound.js';
 
 const ease = (t) => (t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2);
@@ -1047,7 +1048,7 @@ export class ShopScene {
     /* ---- floor stickers, the way supermarkets mark their own aisles ---- */
     [AISLE_START_Z - 3.4, AISLE_START_Z - 11.5].forEach((z, i) => {
       const decal = new THREE.Mesh(
-        new THREE.PlaneGeometry(1.35, 0.75),
+        new THREE.PlaneGeometry(1.2, 0.66),
         new THREE.MeshBasicMaterial({
           map: signTexture(i ? 'ARROWS AHEAD' : 'START HERE', i ? 'সামনে চলুন' : 'এখান থেকে শুরু',
             i ? '#1f5f8b' : '#0d6138'),
@@ -1055,7 +1056,7 @@ export class ShopScene {
         })
       );
       decal.rotation.set(-Math.PI / 2, 0, 0);
-      decal.position.set(0.0, 0.012, z);
+      decal.position.set(-0.62, 0.012, z);
       aisle.add(decal);
     });
 
@@ -1237,114 +1238,102 @@ export class ShopScene {
   buildTrolley() {
     const g = new THREE.Group();
     g.name = 'trolley';
-    // light aluminium, not mirror metal — the shop has no environment map to reflect
-    const chrome = new THREE.MeshStandardMaterial({ color: '#9fa8ad', roughness: 0.55, metalness: 0.2 });
-    const wire = new THREE.MeshStandardMaterial({ color: '#a8b0b4', roughness: 0.6, metalness: 0.15 });
 
-    const W = 0.54, L = 0.80, RIM = 1.02, FLOOR = 0.46;
+    const steel = new THREE.MeshStandardMaterial({ color: '#c2cbd0', roughness: 0.42, metalness: 0.6, envMapIntensity: 1.15 });
+    const wire = new THREE.MeshStandardMaterial({ color: '#b7c0c5', roughness: 0.45, metalness: 0.55, envMapIntensity: 1.1 });
+    const rubber = new THREE.MeshStandardMaterial({ color: '#23272b', roughness: 0.85, metalness: 0.05 });
+    const gripMat = new THREE.MeshStandardMaterial({ color: '#0d6138', roughness: 0.36, metalness: 0.05 });
 
-    // real super-shop baskets are open wire, so a lattice with cut-outs reads right
-    const lattice = (() => {
-      const c = document.createElement('canvas');
-      c.width = 128; c.height = 128;
-      const g2 = c.getContext('2d');
-      g2.clearRect(0, 0, 128, 128);
-      g2.fillStyle = '#b7c0c4';
-      for (let k = 2; k < 128; k += 15) {
-        g2.fillRect(0, k, 128, 3.6);
-        g2.fillRect(k, 0, 3.6, 128);
-      }
-      const t = new THREE.CanvasTexture(c);
-      t.colorSpace = THREE.SRGBColorSpace;
-      t.wrapS = t.wrapT = THREE.RepeatWrapping;
-      t.repeat.set(4, 4);
-      t.anisotropy = 4;
-      return t;
-    })();
-    const meshMat = new THREE.MeshStandardMaterial({
-      map: lattice, alphaMap: lattice, transparent: true, alphaTest: 0.35,
-      side: THREE.DoubleSide, roughness: 0.6, metalness: 0.15, color: '#c2c9cc',
-    });
-
-    // basket floor (solid, as on the real thing)
-    const floor = new THREE.Mesh(new THREE.BoxGeometry(W, 0.018, L),
-      new THREE.MeshStandardMaterial({ color: '#7b8488', roughness: 0.7, metalness: 0.15 }));
-    floor.position.set(0, FLOOR, -0.02);
-    g.add(floor);
-
-    // four lattice walls
-    const wall = (w, h, x, y, z, ry) => {
-      const m = new THREE.Mesh(new THREE.PlaneGeometry(w, h), meshMat);
-      m.position.set(x, y, z);
-      m.rotation.y = ry;
-      g.add(m);
-    };
+    // real supermarket proportions: 0.52 m wide, 0.80 m deep, basket top at 0.95 m
+    const W = 0.52, L = 0.80;
+    const FLOOR = 0.42, RIM = 0.95;
     const H = RIM - FLOOR;
-    wall(W, H, 0, FLOOR + H / 2, -0.02 - L / 2, 0);
-    wall(W, H * 0.72, 0, FLOOR + H * 0.36, -0.02 + L / 2, 0);
-    wall(L, H, -W / 2, FLOOR + H / 2, -0.02, Math.PI / 2);
-    wall(L, H, W / 2, FLOOR + H / 2, -0.02, Math.PI / 2);
+    const BAR = 0.0062;
 
-    // rim rail, welded all the way round
-    const railTop = (w, d, x, z) => {
-      const r = new THREE.Mesh(new THREE.BoxGeometry(w, 0.026, d), chrome);
-      r.position.set(x, RIM, z);
-      g.add(r);
+    const bars = [];
+    const pushBar = (w, h, d, x, y, z) => {
+      const b = new THREE.BoxGeometry(w, h, d);
+      b.translate(x, y, z);
+      bars.push(b);
     };
-    railTop(W + 0.03, 0.026, 0, -0.02 - L / 2);
-    railTop(W + 0.03, 0.026, 0, -0.02 + L / 2);
-    railTop(0.026, L, -W / 2, -0.02);
-    railTop(0.026, L, W / 2, -0.02);
+    const latticeWall = (len, height, along, x, y, z) => {
+      const n = Math.max(4, Math.round(len / 0.072));
+      for (let i = 0; i <= n; i++) {
+        const t = -len / 2 + (i * len) / n;
+        if (along === 'x') pushBar(BAR, height, BAR, x + t, y + height / 2, z);
+        else pushBar(BAR, height, BAR, x, y + height / 2, z + t);
+      }
+      for (let j = 0; j <= 3; j++) {
+        const yy = y + (j * height) / 3;
+        if (along === 'x') pushBar(len, BAR, BAR, x, yy, z);
+        else pushBar(BAR, BAR, len, x, yy, z);
+      }
+    };
 
-    // push handle: two rails and a fat grip, the way you actually hold a trolley
-    [-0.10, 0.10].forEach((dz) => {
-      const bar = new THREE.Mesh(new THREE.BoxGeometry(W + 0.04, 0.026, 0.026), chrome);
-      bar.position.set(0, 1.10, 0.40 + dz);
-      g.add(bar);
-    });
+    /* ---- basket: open wire on all four sides ---- */
+    latticeWall(W, H, 'x', 0, FLOOR, -L / 2);          // front
+    latticeWall(W, H * 0.55, 'x', 0, FLOOR, L / 2);    // back, low so you can see in
+    latticeWall(L, H, 'z', -W / 2, FLOOR, 0);
+    latticeWall(L, H, 'z', W / 2, FLOOR, 0);
+    for (let i = 0; i <= 11; i++) pushBar(W, BAR, BAR, 0, FLOOR + 0.004, -L / 2 + (i * L) / 11);
+    for (let i = 0; i <= 7; i++) pushBar(BAR, BAR, L, -W / 2 + (i * W) / 7, FLOOR + 0.004, 0);
+
+    /* ---- underframe and legs, so the basket is carried, not floating ---- */
     [-1, 1].forEach((sx) => {
-      [-0.10, 0.10].forEach((dz) => {
-        const post = new THREE.Mesh(new THREE.BoxGeometry(0.026, 0.20, 0.026), chrome);
-        post.position.set(sx * (W / 2 - 0.005), 1.00, 0.40 + dz);
-        g.add(post);
+      [-1, 1].forEach((sz) => {
+        // castor bracket + wheel
+        const fork = new THREE.Mesh(new THREE.BoxGeometry(0.026, 0.075, 0.026), steel);
+        fork.position.set(sx * (W / 2 - 0.05), 0.105, sz * (L / 2 - 0.09));
+        g.add(fork);
+        const wheel = new THREE.Mesh(new THREE.CylinderGeometry(0.042, 0.042, 0.028, 14), rubber);
+        wheel.rotation.z = Math.PI / 2;
+        wheel.position.set(sx * (W / 2 - 0.05), 0.048, sz * (L / 2 - 0.09));
+        g.add(wheel);
       });
-      const link = new THREE.Mesh(new THREE.BoxGeometry(0.026, 0.026, 0.22), chrome);
-      link.position.set(sx * (W / 2 - 0.005), 1.10, 0.45);
-      g.add(link);
-      const drop = new THREE.Mesh(new THREE.BoxGeometry(0.024, 0.20, 0.024), chrome);
-      drop.position.set(sx * (W / 2 - 0.005), 0.90, 0.52);
-      drop.rotation.x = -0.22;
-      g.add(drop);
+      // leg from the wheel up to the basket floor
+      const leg = new THREE.Mesh(new THREE.BoxGeometry(0.022, FLOOR - 0.13, 0.022), steel);
+      leg.position.set(sx * (W / 2 - 0.035), 0.13 + (FLOOR - 0.13) / 2, 0);
+      g.add(leg);
+      // lower chassis rail
+      const rail = new THREE.Mesh(new THREE.BoxGeometry(0.022, 0.022, L - 0.05), steel);
+      rail.position.set(sx * (W / 2 - 0.035), 0.135, 0);
+      g.add(rail);
+      // upper rail the basket sits on
+      const upper = new THREE.Mesh(new THREE.BoxGeometry(0.026, 0.026, L - 0.02), steel);
+      upper.position.set(sx * (W / 2 - 0.012), FLOOR, 0);
+      g.add(upper);
+    });
+    [-1, 1].forEach((sz) => {
+      const cross = new THREE.Mesh(new THREE.BoxGeometry(W - 0.05, 0.022, 0.022), steel);
+      cross.position.set(0, 0.135, sz * (L / 2 - 0.09));
+      g.add(cross);
+      const upperCross = new THREE.Mesh(new THREE.BoxGeometry(W + 0.02, 0.026, 0.026), steel);
+      upperCross.position.set(0, FLOOR, sz * (L / 2));
+      g.add(upperCross);
     });
 
-    // wheels
-    [[-1, -1], [1, -1], [-1, 1], [1, 1]].forEach(([sx, sz]) => {
-      const wheel = new THREE.Mesh(
-        new THREE.CylinderGeometry(0.045, 0.045, 0.03, 12),
-        new THREE.MeshStandardMaterial({ color: '#2b2f31', roughness: 0.8 })
-      );
-      wheel.rotation.z = Math.PI / 2;
-      wheel.position.set(sx * (W / 2 - 0.04), 0.045, -0.02 + sz * (L / 2 - 0.05));
-      g.add(wheel);
-    });
-
-    // the shop's own grip colour, right under your hands
-    const grip = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.024, 0.024, W * 0.78, 14),
-      new THREE.MeshStandardMaterial({ color: '#0d6138', roughness: 0.34, metalness: 0.05 })
-    );
-    grip.rotation.z = Math.PI / 2;
-    grip.position.set(0, 1.10, 0.40);
-    g.add(grip);
+    /* ---- handle: two uprights and the grip you actually hold ---- */
     [-1, 1].forEach((sx) => {
-      const cap = new THREE.Mesh(
-        new THREE.CylinderGeometry(0.028, 0.028, 0.05, 12),
-        new THREE.MeshStandardMaterial({ color: '#1f2427', roughness: 0.6 })
-      );
-      cap.rotation.z = Math.PI / 2;
-      cap.position.set(sx * W * 0.40, 1.10, 0.40);
-      g.add(cap);
+      const up = new THREE.Mesh(new THREE.BoxGeometry(0.024, 0.12, 0.024), steel);
+      up.position.set(sx * (W / 2), RIM + 0.05, L / 2 - 0.015);
+      up.rotation.x = -0.20;
+      g.add(up);
     });
+    const bar = new THREE.Mesh(new THREE.CylinderGeometry(0.016, 0.016, W + 0.02, 12), steel);
+    bar.rotation.z = Math.PI / 2;
+    bar.position.set(0, RIM + 0.105, L / 2 - 0.045);
+    g.add(bar);
+    const grip = new THREE.Mesh(new THREE.CylinderGeometry(0.024, 0.024, W * 0.72, 14), gripMat);
+    grip.rotation.z = Math.PI / 2;
+    grip.position.set(0, RIM + 0.105, L / 2 - 0.045);
+    g.add(grip);
+
+    /* ---- the wire basket itself, one merged opaque mesh ---- */
+    const basketGeo = mergeGeometries(bars, false);
+    const basketMesh = new THREE.Mesh(basketGeo, wire);
+    basketMesh.castShadow = false;
+    basketMesh.receiveShadow = false;
+    g.add(basketMesh);
 
     // items dropped into the basket live here
     this.basket = new THREE.Group();
@@ -1373,7 +1362,7 @@ export class ShopScene {
     const cols = 3;
     const col = n % cols, row = Math.floor(n / cols) % 2, layer = Math.floor(n / (cols * 2));
     // packed into the back of the basket, tops poking above the rim like a real trolley
-    mesh.position.set(-0.15 + col * 0.15, 0.60 + layer * 0.30, -0.42 + row * 0.20);
+    mesh.position.set(-0.15 + col * 0.15, 0.46 + layer * 0.26, -0.30 + row * 0.20);
     mesh.rotation.y = Math.PI + (n % 2 ? 0.26 : -0.20);
     mesh.rotation.z = (n % 3 === 0 ? 0.10 : -0.05);
     this.basket.add(mesh);
@@ -1383,9 +1372,10 @@ export class ShopScene {
     if (!this.trolley || !this.trolley.visible) return;
     if (this.mode === 'checkout') {
       // parked beside the belt, exactly where you would leave it
-      const parked = new THREE.Vector3(1.55, 0, (this.checkoutZ || -30) + 1.35);
-      this.trolley.position.lerp(parked, Math.min(1, dt * 8));
-      this.trolley.rotation.y = Math.PI * 0.78;
+      const parked = new THREE.Vector3(0.80, 0, (this.checkoutZ || -30) + 2.50);
+      if (this.trolley.position.distanceTo(parked) > 1.0) this.trolley.position.copy(parked);
+      else this.trolley.position.lerp(parked, Math.min(1, dt * 8));
+      this.trolley.rotation.y = Math.PI * 0.5;
       this.trolley.position.y = 0;
       return;
     }
