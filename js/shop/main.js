@@ -192,6 +192,22 @@ function startTill() {
     </div>`).join('');
 
   scene.goToCheckout();
+
+  // the belt is the source of truth: the panel follows the machine, not the other way round
+  const totalQty = lines.reduce((a, l) => a + l.qty, 0);
+  const syncTill = () => {
+    const n = scene.checkout ? scene.checkout.scannedCount() : TILL.scanned;
+    if (n === TILL.scanned) return;
+    TILL.scanned = n;
+    TILL.total = scene.checkout.scannedTotal();
+    $('#tillCount').textContent = `${n} of ${totalQty} items`;
+    $('#tillScanned').textContent = money(TILL.total);
+    $('#tillBar').style.width = Math.round((n / totalQty) * 100) + '%';
+    $$('#tillList .till-line').forEach((row, i) => row.classList.toggle('scanned', i < n));
+  };
+  if (TILL.poller) clearInterval(TILL.poller);
+  TILL.poller = setInterval(syncTill, 180);
+
   setTimeout(() => {
     scene.startCheckout(lines, (meta) => {
       // light up the next pack in the list, as if it just went over the glass
@@ -207,6 +223,14 @@ function startTill() {
     }, null, () => {
       // everything has been read — now the money
       TILL.running = false;
+      if (TILL.poller) { clearInterval(TILL.poller); TILL.poller = null; }
+      // settle the panel on the real figures regardless of any missed frame
+      TILL.scanned = totalQty;
+      TILL.total = lines.reduce((a, l) => a + l.product.price * l.qty, 0);
+      $('#tillCount').textContent = `${totalQty} of ${totalQty} items`;
+      $('#tillScanned').textContent = money(TILL.total);
+      $('#tillBar').style.width = '100%';
+      $$('#tillList .till-line').forEach((row) => row.classList.add('scanned'));
       $('#tillHint').textContent = 'All scanned. Sadia has bagged it for you.';
       const { subtotal, delivery, total } = tillAmount();
       $('#payAmount').textContent = money(total);

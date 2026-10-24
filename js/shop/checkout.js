@@ -272,6 +272,8 @@ export function buildCheckoutLane(z, x = 0) {
       state.lines = [];
       drawScreen();
     },
+    scannedCount: () => state.lines.length,
+    scannedTotal: () => state.lines.reduce((a, l) => a + l.price, 0),
     screen: { setLines: (lines) => { state.lines = lines.slice(); drawScreen(); } },
   };
   return api;
