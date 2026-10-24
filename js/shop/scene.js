@@ -12,6 +12,7 @@ import { buildProduct, priceTag, shelfTalker, ensureBackTexture, glowTexture, pb
 import { buildPerson } from './people.js';
 import { buildCheckoutLane } from './checkout.js';
 import { mergeGeometries } from '../../vendor/jsm/utils/BufferGeometryUtils.js';
+import { GLTFLoader } from '../../vendor/jsm/loaders/GLTFLoader.js';
 import { initShopSound, setWalkSpeed, beep, announce } from './sound.js';
 
 const ease = (t) => (t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2);
@@ -70,10 +71,13 @@ function signTexture(text, sub, bg = '#0a4a2c', fg = '#ffffff') {
 export class ShopScene {
   constructor(canvas, department) {
     // quality tier: phones get the cheap chain, desktops get AO + bloom
-    const small = Math.min(window.innerWidth, window.innerHeight) < 820;
+    // a phone is narrow in landscape; a 1280x800 laptop window is NOT a phone.
+    // (this used Math.min(...) < 820, which quietly gave every 800px-tall desktop
+    // the cheap chain — no AO — and that is why it looked flat and papery)
+    const small = window.innerWidth < 900 || window.innerHeight < 520;
     const cores = navigator.hardwareConcurrency || 4;
     const forced = new URLSearchParams(location.search).get('q');
-    this.tier = forced || (small || cores <= 4 ? 'low' : 'high');
+    this.tier = forced || (small || cores <= 2 ? 'low' : 'high');
     this.canvas = canvas;
     this.prevTime = performance.now();
     this.mode = 'street';
@@ -201,7 +205,7 @@ export class ShopScene {
 
     this.composer.addPass(new RenderPass(this.scene, this.camera));
 
-    if (this.tier === 'high') {
+    if (this.tier !== 'low') {
       // ambient occlusion: the dark creases under shelves and behind packs
       const gtao = new GTAOPass(this.scene, this.camera, window.innerWidth, window.innerHeight);
       gtao.output = GTAOPass.OUTPUT.Default;
@@ -215,9 +219,9 @@ export class ShopScene {
     // bloom on the ceiling panels and speculars — this is what makes it read as a camera
     const bloom = new UnrealBloomPass(
       new THREE.Vector2(window.innerWidth, window.innerHeight),
-      this.tier === 'high' ? 0.16 : 0.13,   // strength
+      this.tier === 'high' ? 0.09 : 0.08,   // strength
       0.7,                                   // radius
-      0.94                                   // threshold: only really bright things glow
+      1.06                                   // threshold: only the lamp tubes glow
     );
     this.bloom = bloom;
     this.composer.addPass(bloom);
@@ -497,9 +501,9 @@ export class ShopScene {
     const floor = new THREE.Mesh(
       new THREE.PlaneGeometry(9.5, 46),
       new THREE.MeshPhysicalMaterial({
-        ...pbrSet('terrazzo_tiles', [2.2, 10]),
-        roughness: 0.72, metalness: 0.02,
-        clearcoat: 0.85, clearcoatRoughness: 0.12, color: '#ffffff', envMapIntensity: 1.35,
+        ...pbrSet('terrazzo_tiles', [8.4, 40]),
+        roughness: 0.74, metalness: 0.0,
+        clearcoat: 0.42, clearcoatRoughness: 0.24, color: '#ffffff', envMapIntensity: 0.85,
       })
     );
     floor.rotation.x = -Math.PI / 2;
@@ -510,7 +514,7 @@ export class ShopScene {
     // ceiling with light strips
     const ceil = new THREE.Mesh(
       new THREE.PlaneGeometry(9.5, 46),
-      new THREE.MeshStandardMaterial({ color: '#f4efe2', roughness: 0.9, side: THREE.DoubleSide, emissive: '#2a2618', emissiveIntensity: 0.18 })
+      new THREE.MeshStandardMaterial({ color: '#efe9db', roughness: 0.9, side: THREE.DoubleSide })
     );
     ceil.rotation.x = Math.PI / 2;
     ceil.position.set(0, 3.4, -15);
@@ -533,7 +537,7 @@ export class ShopScene {
     }
 
     // side walls
-    const wallMat = new THREE.MeshStandardMaterial({ color: '#fbf7ec', roughness: 0.9, emissive: '#2b2719', emissiveIntensity: 0.15 });
+    const wallMat = new THREE.MeshStandardMaterial({ color: '#f1ebdd', roughness: 0.9 });
     [-4.9, 4.9].forEach((x) => {
       const w = new THREE.Mesh(new THREE.PlaneGeometry(46, 3.4), wallMat);
       w.rotation.y = x > 0 ? -Math.PI / 2 : Math.PI / 2;
@@ -541,8 +545,10 @@ export class ShopScene {
       g.add(w);
     });
 
+    // this used to sit at z = -33, i.e. 0.5 m behind the checkout counter: it sealed the
+    // shop off and hid the whole checkout hall. Push it past the hall's back wall.
     const back = new THREE.Mesh(new THREE.PlaneGeometry(9.5, 3.4), wallMat);
-    back.position.set(0, 1.7, -33);
+    back.position.set(0, 1.7, -39.4);
     g.add(back);
 
     // service desk near the entrance
@@ -1013,7 +1019,7 @@ export class ShopScene {
           map: signTexture(t, i ? 'প্রতিদিন তাজা' : 'সাশ্রয় করুন', i ? '#a2601a' : '#8a2f2a'),
         })
       );
-      card.position.set((i ? 1 : -1) * 0.85, 1.28, AISLE_END_Z + 0.26);
+      card.position.set((i ? 1 : -1) * 0.85, 1.28, AISLE_END_Z + 0.93);
       aisle.add(card);
     });
 
@@ -1021,7 +1027,9 @@ export class ShopScene {
       new THREE.BoxGeometry(4.2, 1.6, 0.7),
       new THREE.MeshStandardMaterial({ color: '#f2ede0', roughness: 0.8 })
     );
-    endcap.position.set(0, 0.8, AISLE_END_Z - 0.6);
+    // the end-of-aisle display used to sit 0.6 m PAST the aisle end — i.e. in the
+    // middle of the checkout hall, right where the shopper stands to pay
+    endcap.position.set(0, 0.8, AISLE_END_Z + 0.55);
     aisle.add(endcap);
 
     /* ---- upper-wall promo panels, like the posters every real aisle carries ---- */
@@ -1149,56 +1157,104 @@ export class ShopScene {
     /* ---- checkout hall at the end of the run ---- */
     const CZ = AISLE_END_Z - 4.4;
     this.checkoutZ = CZ;
-    const hallFloor = new THREE.Mesh(
-      new THREE.PlaneGeometry(9.0, 9.0),
-      new THREE.MeshPhysicalMaterial({
-        ...pbrSet('terrazzo_tiles', [3, 3]),
-        roughness: 0.72, metalness: 0.02, clearcoat: 0.85, clearcoatRoughness: 0.12,
-        color: '#ffffff', envMapIntensity: 1.35,
-      })
-    );
-    hallFloor.rotation.x = -Math.PI / 2;
-    hallFloor.position.set(0, 0.001, CZ - 1.5);
-    hallFloor.receiveShadow = true;
-    aisle.add(hallFloor);
-
+    // the interior floor already covers the checkout hall — a second plane here
+    // just z-fought and blew out at grazing angles
     const hallCeil = new THREE.Mesh(
-      new THREE.BoxGeometry(9.0, 0.1, 9.0),
+      new THREE.BoxGeometry(5.0, 0.1, 9.6),
       new THREE.MeshStandardMaterial({ color: '#f1ebdc', roughness: 0.92 })
     );
     hallCeil.position.set(0, 3.5, CZ - 1.5);
     aisle.add(hallCeil);
     const hallWall = new THREE.Mesh(
-      new THREE.BoxGeometry(9.0, 3.5, 0.12),
+      new THREE.BoxGeometry(5.06, 3.5, 0.12),
       new THREE.MeshStandardMaterial({ color: '#d3dbd2', roughness: 0.95 })
     );
     hallWall.position.set(0, 1.75, CZ - 5.6);
     aisle.add(hallWall);
+
+    [-2.5, 2.5].forEach((hx) => {
+      const sideWall = new THREE.Mesh(
+        new THREE.BoxGeometry(0.1, 3.5, 9.6),
+        new THREE.MeshStandardMaterial({ color: '#e4ddcb', roughness: 0.95 })
+      );
+      sideWall.position.set(hx, 1.75, CZ - 1.0);
+      aisle.add(sideWall);
+    });
 
     // the big "CHECKOUT" board you can read from halfway down the aisle
     const coSign = new THREE.Mesh(
       new THREE.PlaneGeometry(3.4, 0.62),
       new THREE.MeshBasicMaterial({ map: signTexture('CHECKOUT', 'চেকআউট · পেমেন্ট', '#c1121f') })
     );
-    coSign.position.set(0, 2.05, CZ - 5.52);
+    coSign.position.set(0, 2.02, CZ - 5.52);
     aisle.add(coSign);
     const wallBand = new THREE.Mesh(
-      new THREE.BoxGeometry(9.0, 0.34, 0.06),
+      new THREE.BoxGeometry(5.0, 0.34, 0.06),
       new THREE.MeshStandardMaterial({ color: '#0d6138', roughness: 0.6 })
     );
     wallBand.position.set(0, 0.42, CZ - 5.53);
     aisle.add(wallBand);
     const wallBand2 = new THREE.Mesh(
-      new THREE.BoxGeometry(9.0, 0.10, 0.06),
+      new THREE.BoxGeometry(5.0, 0.10, 0.06),
       new THREE.MeshStandardMaterial({ color: '#c1121f', roughness: 0.6 })
     );
     wallBand2.position.set(0, 0.66, CZ - 5.53);
     aisle.add(wallBand2);
 
+    /* ---- the wall you stare at while you pay: impulse shelves, posters, a clock ---- */
+    const impulseMat = new THREE.MeshStandardMaterial({ color: '#e6dfcd', roughness: 0.8 });
+    const impulseX = [-1.42, 1.42];
+    impulseX.forEach((ix) => {
+      const rack = new THREE.Mesh(new THREE.BoxGeometry(1.24, 1.5, 0.3), impulseMat);
+      rack.position.set(ix, 0.75, CZ - 5.16);
+      rack.castShadow = true;
+      aisle.add(rack);
+      // three rows of small packs, coloured so the wall is not a blank slab
+      const hues = ['#c1121f', '#0d6138', '#a2601a', '#2f4f9e', '#8a2f2a', '#6b3f8f'];
+      for (let row = 0; row < 3; row++) {
+        for (let k = 0; k < 4; k++) {
+          const pack = new THREE.Mesh(
+            new THREE.BoxGeometry(0.24, 0.30, 0.14),
+            new THREE.MeshStandardMaterial({ color: hues[(row * 4 + k + ix * 3) % hues.length | 0], roughness: 0.62 })
+          );
+          pack.position.set(ix - 0.45 + k * 0.30, 0.34 + row * 0.44, CZ - 4.99);
+          aisle.add(pack);
+        }
+      }
+      const shelfEdge = new THREE.Mesh(
+        new THREE.BoxGeometry(1.24, 0.05, 0.32),
+        new THREE.MeshStandardMaterial({ color: '#f2eee2', roughness: 0.5, metalness: 0.25 })
+      );
+      shelfEdge.position.set(ix, 1.53, CZ - 5.16);
+      aisle.add(shelfEdge);
+    });
+
+    // lightbox poster over the wall
+    const poster = new THREE.Mesh(
+      new THREE.PlaneGeometry(2.1, 0.86),
+      new THREE.MeshBasicMaterial({ map: signTexture('THANK YOU', 'ধন্যবাদ · আবার আসবেন', '#0d6138'), toneMapped: false })
+    );
+    poster.position.set(0, 2.86, CZ - 5.5);
+    aisle.add(poster);
+    // and a wall clock, because every one of these shops has the same one
+    const clockFace = new THREE.Mesh(
+      new THREE.CircleGeometry(0.24, 24),
+      new THREE.MeshStandardMaterial({ color: '#f7f4ea', roughness: 0.7 })
+    );
+    clockFace.position.set(-2.02, 2.86, CZ - 5.5);
+    aisle.add(clockFace);
+    const clockHands = new THREE.Mesh(
+      new THREE.BoxGeometry(0.02, 0.17, 0.01),
+      new THREE.MeshStandardMaterial({ color: '#20262a', roughness: 0.6 })
+    );
+    clockHands.position.set(-2.02, 2.91, CZ - 5.49);
+    clockHands.rotation.z = 0.4;
+    aisle.add(clockHands);
+
     [-2.6, 2.6].forEach((lx) => {
-      const lamp = new THREE.PointLight(0xfff0d2, 2.4, 11, 2);
+      const lamp = new THREE.PointLight(0xfff0d2, 1.7, 10, 2);
       lamp.position.set(lx, 3.05, CZ - 0.6);
-      lamp.userData.baseIntensity = 2.4;
+      lamp.userData.baseIntensity = 1.7;
       aisle.add(lamp);
     });
     for (let i = 0; i < 2; i++) {
@@ -1339,9 +1395,36 @@ export class ShopScene {
     this.basket = new THREE.Group();
     g.add(this.basket);
 
+    this.trolleyBody = g;
     g.visible = false;
     this.trolley = g;
     this.scene.add(g);
+    if (typeof window !== 'undefined') window.__THREE = THREE;
+    this.loadTrolleyModel();
+  }
+
+  /* Swap the hand-built trolley for the one modelled in Blender. */
+  loadTrolleyModel() {
+    new GLTFLoader().load('models/trolley.glb', (gltf) => {
+      const model = gltf.scene;
+      model.traverse((o) => {
+        if (o.isMesh) {
+          o.castShadow = false;
+          o.receiveShadow = false;
+          o.frustumCulled = false;
+          if (o.material) o.material.envMapIntensity = 1.0;
+        }
+      });
+      // keep the item anchor, drop everything that was built by hand
+      const keep = this.basket;
+      [...this.trolley.children].forEach((c) => {
+        if (c !== keep) this.trolley.remove(c);
+      });
+      this.trolley.add(model);
+      this.trolley.userData.modelled = true;
+    }, undefined, (err) => {
+      console.warn('trolley model failed to load, keeping the built one', err);
+    });
   }
 
   takeTrolley() {
@@ -1372,7 +1455,7 @@ export class ShopScene {
     if (!this.trolley || !this.trolley.visible) return;
     if (this.mode === 'checkout') {
       // parked beside the belt, exactly where you would leave it
-      const parked = new THREE.Vector3(0.80, 0, (this.checkoutZ || -30) + 2.50);
+      const parked = new THREE.Vector3(0.98, 0, (this.checkoutZ || -30) + 2.35);
       if (this.trolley.position.distanceTo(parked) > 1.0) this.trolley.position.copy(parked);
       else this.trolley.position.lerp(parked, Math.min(1, dt * 8));
       this.trolley.rotation.y = Math.PI * 0.5;
@@ -1478,7 +1561,7 @@ export class ShopScene {
       street: { pos: new THREE.Vector3(0, 1.68, 15.4), look: new THREE.Vector3(0, 3.15, 5.2) },
       hall:   { pos: new THREE.Vector3(0, 1.6, 1.8),  look: new THREE.Vector3(0, 1.5, -9) },
       aisle:  { pos: new THREE.Vector3(0, 1.55, this.aisleZ), look: new THREE.Vector3(0, 1.3, this.aisleZ - 8) },
-      checkout: { pos: new THREE.Vector3(0.15, 1.68, (this.checkoutZ || -30) + 3.5), look: new THREE.Vector3(0.30, 1.00, (this.checkoutZ || -30) + 0.2) },
+      checkout: { pos: new THREE.Vector3(0.40, 1.66, (this.checkoutZ || -30) + 3.6), look: new THREE.Vector3(0.55, 1.02, (this.checkoutZ || -30) + 0.1) },
 
     };
   }
