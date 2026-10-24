@@ -45,113 +45,132 @@ function footprint(product) {
 
 /* ------------------------------------------------------- label artwork */
 function drawLabel(product, ctx, W, H) {
-  const c = product.colour || '#eee';
-  const a = product.accent || '#333';
+  // Layout follows the real Bangladeshi pack: patterned bands top and bottom,
+  // a brand cartouche, the product name in English and Bangla, and a clear
+  // oval window with the grain itself showing through.
+  const c = product.colour || '#f3ecdc';
+  const a = product.accent || '#0d6138';
   ctx.fillStyle = c;
   ctx.fillRect(0, 0, W, H);
 
   // soft vertical shading so the pack is not a flat rectangle
   const g = ctx.createLinearGradient(0, 0, W, H);
-  g.addColorStop(0, 'rgba(255,255,255,.35)');
-  g.addColorStop(0.45, 'rgba(255,255,255,0)');
-  g.addColorStop(1, 'rgba(0,0,0,.13)');
+  g.addColorStop(0, 'rgba(255,255,255,.30)');
+  g.addColorStop(0.5, 'rgba(255,255,255,0)');
+  g.addColorStop(1, 'rgba(0,0,0,.12)');
   ctx.fillStyle = g;
   ctx.fillRect(0, 0, W, H);
 
-  // top brand band
+  const diamond = (x, y, r, col) => {
+    ctx.beginPath();
+    ctx.moveTo(x, y - r); ctx.lineTo(x + r, y); ctx.lineTo(x, y + r); ctx.lineTo(x - r, y);
+    ctx.closePath();
+    ctx.fillStyle = col;
+    ctx.fill();
+  };
+
+  // patterned band helper — the colourful lattice every rice pack wears
+  const band = (y0, y1, size) => {
+    ctx.save();
+    ctx.beginPath(); ctx.rect(0, y0, W, y1 - y0); ctx.clip();
+    ctx.fillStyle = 'rgba(255,255,255,.55)';
+    ctx.fillRect(0, y0, W, y1 - y0);
+    const step = size * 2;
+    for (let row = 0; row * step + y0 < y1 + step; row++) {
+      for (let col = -1; col * step < W + step; col++) {
+        const x = col * step + (row % 2 ? size : 0);
+        const y = y0 + row * step;
+        const tint = ['rgba(255,255,255,.85)', a, 'rgba(120,180,150,.55)', 'rgba(214,164,196,.55)'][(row + col) % 4];
+        diamond(x, y, size * 0.86, tint);
+      }
+    }
+    ctx.restore();
+  };
+
+  // top and bottom lattice bands
+  band(H * 0.015, H * 0.145, W * 0.075);
+  band(H * 0.855, H * 0.985, W * 0.075);
+
+  // solid colour edges so the pack does not bleed into the diamonds
   ctx.fillStyle = a;
-  ctx.fillRect(0, 0, W, H * 0.19);
-  ctx.fillStyle = '#fff';
-  ctx.textBaseline = 'middle';
-  ctx.textAlign = 'left';
-  // shave the brand until it clears the weight on the right of the band
-  const weightFont = `600 ${H * 0.072}px Inter, Arial, sans-serif`;
-  ctx.font = weightFont;
-  const weightW = ctx.measureText(product.weight || '').width;
-  const brandRoom = W * 0.86 - weightW - W * 0.06;
-  let brandSize = H * 0.105;
-  let brand = String(product.brand || '').toUpperCase();
-  ctx.font = `800 ${brandSize}px Inter, Arial, sans-serif`;
-  while (ctx.measureText(brand).width > brandRoom && brandSize > H * 0.045) {
-    brandSize -= 2;
-    ctx.font = `800 ${brandSize}px Inter, Arial, sans-serif`;
-  }
-  ctx.fillText(brand, W * 0.07, H * 0.098);
-  ctx.textAlign = 'right';
-  ctx.font = weightFont;
-  ctx.fillText(product.weight || '', W * 0.93, H * 0.098);
+  ctx.fillRect(0, 0, W, H * 0.016);
+  ctx.fillRect(0, H * 0.984, W, H * 0.016);
 
-  // product name
-  ctx.textAlign = 'left';
+  // brand cartouche
+  const bw = W * 0.62, bh = H * 0.115, bx = (W - bw) / 2, by = H * 0.175;
+  ctx.save();
+  ctx.shadowColor = 'rgba(0,0,0,.22)';
+  ctx.shadowBlur = H * 0.012;
+  ctx.shadowOffsetY = H * 0.006;
   ctx.fillStyle = a;
-  ctx.font = `800 ${H * 0.115}px Inter, Arial, sans-serif`;
-  const hasWindow = product.shape === 'sack' || product.shape === 'pouch';
-  const nameCol = hasWindow ? W * 0.44 : W * 0.86;
-  const upper = product.name.toUpperCase();
-  let nameSize = H * 0.115;
-  let nameLines = wrap(ctx, upper, nameCol);
-  ctx.font = `800 ${nameSize}px Inter, Arial, sans-serif`;
-  while (nameLines.length > 2 && nameSize > H * 0.06) {
-    nameSize -= 2;
-    ctx.font = `800 ${nameSize}px Inter, Arial, sans-serif`;
-    nameLines = wrap(ctx, upper, nameCol);
-  }
-  nameLines.slice(0, 2).forEach((line, i) => {
-    const sz = fitFont(ctx, line, nameCol, nameSize);
-    ctx.font = `800 ${sz}px Inter, Arial, sans-serif`;
-    ctx.fillText(line, W * 0.07, H * (0.325 + i * 0.135));
-  });
-
-  // bangla name
-  ctx.fillStyle = 'rgba(20,30,20,.82)';
-  ctx.font = `600 ${H * 0.088}px "Noto Sans Bengali", "Hind Siliguri", "Nirmala UI", sans-serif`;
-  ctx.fillText(product.bn, W * 0.07, H * 0.685);
-
-  // clear window with real grain showing through
-  if (product.shape === 'sack' || product.shape === 'pouch') {
-    drawGrainWindow(ctx, product, W * 0.585, H * 0.235, W * 0.345, H * 0.44);
-  }
-
-  // decorative rule
-  ctx.strokeStyle = a;
-  ctx.globalAlpha = 0.35;
-  ctx.lineWidth = Math.max(1, H * 0.006);
-  ctx.beginPath();
-  ctx.moveTo(W * 0.07, H * 0.755);
-  ctx.lineTo(W * 0.93, H * 0.755);
-  ctx.stroke();
-  ctx.globalAlpha = 1;
-
-  // claim line, always inside the pack edge
-  const claim = product.claim || 'Premium quality · selected for you';
-  ctx.fillStyle = 'rgba(20,30,20,.62)';
-  fitFont(ctx, claim, W * 0.80, H * 0.052, 500);
-  ctx.textAlign = 'left';
-  ctx.fillText(claim, W * 0.07, H * 0.80);
-
-  // fake barcode strip
-  ctx.fillStyle = 'rgba(15,20,15,.85)';
-  let x = W * 0.07;
-  while (x < W * 0.40) {
-    const bwd = 1 + Math.random() * 4;
-    ctx.fillRect(x, H * 0.86, bwd, H * 0.075);
-    x += bwd + 1 + Math.random() * 3;
-  }
-  ctx.fillStyle = 'rgba(20,30,20,.55)';
-  fitFont(ctx, 'Weight ' + (product.weight || ''), W * 0.30, H * 0.036, 600);
-  ctx.textAlign = 'left';
-  ctx.fillText('Weight ' + (product.weight || ''), W * 0.07, H * 0.965);
-
-  // Shohoj Bazar seller mark
-  ctx.fillStyle = a;
-  ctx.globalAlpha = 0.9;
-  roundedRect(ctx, W * 0.56, H * 0.855, W * 0.37, H * 0.075, H * 0.02);
+  roundedRect(ctx, bx, by, bw, bh, bh * 0.28);
   ctx.fill();
-  ctx.globalAlpha = 1;
+  ctx.restore();
+  ctx.strokeStyle = 'rgba(255,255,255,.75)';
+  ctx.lineWidth = Math.max(1.5, H * 0.006);
+  roundedRect(ctx, bx + H * 0.008, by + H * 0.008, bw - H * 0.016, bh - H * 0.016, bh * 0.24);
+  ctx.stroke();
   ctx.fillStyle = '#fff';
-  fitFont(ctx, 'SHOHOJ BAZAR', W * 0.32, H * 0.046, 700);
   ctx.textAlign = 'center';
-  ctx.fillText('SHOHOJ BAZAR', W * 0.745, H * 0.893);
+  ctx.textBaseline = 'middle';
+  const brandText = String(product.brand || '').toUpperCase();
+  const bsz = fitFont(ctx, brandText, bw * 0.82, H * 0.078, 800);
+  ctx.font = `800 ${bsz}px Inter, Arial, sans-serif`;
+  ctx.fillText(brandText, W / 2, by + bh * 0.52);
+
+  // product name, English then Bangla
+  ctx.textBaseline = 'middle';
+  ctx.fillStyle = a;
+  const nameEn = product.name.toUpperCase();
+  let nsz = fitFont(ctx, nameEn, W * 0.86, H * 0.082, 800);
+  ctx.font = `800 ${nsz}px Inter, Arial, sans-serif`;
+  ctx.fillText(nameEn, W / 2, H * 0.355);
+
+  ctx.fillStyle = 'rgba(20,30,20,.86)';
+  ctx.font = `600 ${H * 0.062}px "Noto Sans Bengali", "Hind Siliguri", "Nirmala UI", sans-serif`;
+  ctx.fillText(product.bn, W / 2, H * 0.425);
+
+  // the window: an oval cut-out with real grain behind glass
+  if (product.shape === 'sack' || product.shape === 'pouch' || product.shape === 'box') {
+    drawGrainWindow(ctx, product, W * 0.17, H * 0.465, W * 0.66, H * 0.30, true);
+  }
+
+  // weight badge
+  const wt = (product.weight || '').toUpperCase();
+  const ww = W * 0.34, wh = H * 0.072;
+  ctx.fillStyle = 'rgba(255,255,255,.92)';
+  roundedRect(ctx, (W - ww) / 2, H * 0.785, ww, wh, wh * 0.5);
+  ctx.fill();
+  ctx.strokeStyle = a;
+  ctx.lineWidth = Math.max(1.2, H * 0.005);
+  roundedRect(ctx, (W - ww) / 2, H * 0.785, ww, wh, wh * 0.5);
+  ctx.stroke();
+  ctx.fillStyle = a;
+  const wsz = fitFont(ctx, wt, ww * 0.8, H * 0.050, 800);
+  ctx.font = `800 ${wsz}px Inter, Arial, sans-serif`;
+  ctx.fillText(wt, W / 2, H * 0.822);
+
+  // fine print strip
+  ctx.fillStyle = 'rgba(20,30,20,.55)';
+  const claim = product.claim || 'Premium quality · selected for you';
+  const csz = fitFont(ctx, claim, W * 0.84, H * 0.036, 600);
+  ctx.font = `600 ${csz}px Inter, Arial, sans-serif`;
+  ctx.fillText(claim, W / 2, H * 0.925);
+
+  // barcode, bottom left corner of the face
+  ctx.fillStyle = 'rgba(15,20,15,.8)';
+  let x = W * 0.06;
+  while (x < W * 0.22) {
+    const bwd = 1 + Math.random() * 3;
+    ctx.fillRect(x, H * 0.945, bwd, H * 0.028);
+    x += bwd + 1 + Math.random() * 2;
+  }
+  fitFont(ctx, 'SHOHOJ BAZAR', W * 0.34, H * 0.034, 800);
+  ctx.textAlign = 'right';
+  ctx.fillStyle = a;
+  ctx.font = `800 ${H * 0.034}px Inter, Arial, sans-serif`;
+  ctx.fillText('SHOHOJ BAZAR', W * 0.94, H * 0.96);
+  ctx.textAlign = 'center';
 }
 
 /* shrinks a font size until the string fits the given width */
@@ -166,9 +185,14 @@ function fitFont(ctx, text, maxWidth, size, weight = 800, family = 'Inter, Arial
 }
 
 /* a heap of grain behind a clear pack window — what rice actually looks like */
-function drawGrainWindow(ctx, product, x, y, w, h) {
+function drawGrainWindow(ctx, product, x, y, w, h, oval = false) {
   ctx.save();
-  roundedRect(ctx, x, y, w, h, h * 0.10);
+  if (oval) {
+    ctx.beginPath();
+    ctx.ellipse(x + w / 2, y + h / 2, w / 2, h / 2, 0, 0, Math.PI * 2);
+  } else {
+    roundedRect(ctx, x, y, w, h, h * 0.10);
+  }
   ctx.clip();
 
   // the inside of a rice bag is in shadow — grains only read against a darker base
@@ -218,9 +242,14 @@ function drawGrainWindow(ctx, product, x, y, w, h) {
   ctx.fillStyle = glass;
   ctx.fillRect(x, y, w, h);
 
-  ctx.strokeStyle = 'rgba(30,40,30,.28)';
-  ctx.lineWidth = Math.max(1.5, w * 0.012);
-  roundedRect(ctx, x + 1, y + 1, w - 2, h - 2, h * 0.10);
+  ctx.strokeStyle = 'rgba(255,255,255,.9)';
+  ctx.lineWidth = Math.max(3, w * 0.022);
+  if (oval) {
+    ctx.beginPath();
+    ctx.ellipse(x + w / 2, y + h / 2, w / 2 - 2, h / 2 - 2, 0, 0, Math.PI * 2);
+  } else {
+    roundedRect(ctx, x + 1, y + 1, w - 2, h - 2, h * 0.10);
+  }
   ctx.stroke();
   ctx.restore();
 }

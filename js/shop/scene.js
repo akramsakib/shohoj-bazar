@@ -712,6 +712,13 @@ export class ShopScene {
 
   /* Lift the pack out of the shelf and bring it in front of the camera. */
   inspect(productGroup) {
+    // if you grab a pack mid-walk, finish the camera move first so the pack
+    // is lifted in front of the aisle camera, not in front of a moving one
+    if (this.tween) {
+      this.camera.position.copy(this.tween.to);
+      this.lookTarget.copy(this.tween.lookTo);
+      this.tween = null;
+    }
     this.picked = productGroup;
     ensureBackTexture(productGroup);
     productGroup.traverse((o) => { if (o.userData.isContactShadow) o.visible = false; });
@@ -727,6 +734,24 @@ export class ShopScene {
       rot: productGroup.rotation.clone(),
     };
     productGroup.userData.inspectTarget = true;
+
+    // place it in the hand immediately — a pack you just grabbed should not drift
+    const dir = new THREE.Vector3();
+    this.camera.getWorldDirection(dir);
+    const up = this.camera.up.clone().normalize();
+    const right = new THREE.Vector3().crossVectors(dir, up).normalize();
+    const DIST = this.portrait ? 1.30 : 1.12;
+    productGroup.position.copy(this.camera.position.clone()
+      .add(dir.multiplyScalar(DIST))
+      .addScaledVector(right, this.portrait ? 0 : -0.34)
+      .addScaledVector(up, this.portrait ? 0.46 : 0.02));
+    productGroup.rotation.set(0, 0, 0);
+
+    const box = new THREE.Box3().setFromObject(productGroup);
+    const h = Math.max(box.max.y - box.min.y, 0.10);
+    const frameH = 2 * DIST * Math.tan(THREE.MathUtils.degToRad(this.camera.fov) / 2);
+    productGroup.userData.holdScale = THREE.MathUtils.clamp((frameH * (this.portrait ? 0.22 : 0.33)) / h, 0.5, 2.6);
+    productGroup.scale.setScalar(productGroup.userData.holdScale);
   }
 
   release() {
@@ -857,7 +882,7 @@ export class ShopScene {
         const target = this.camera.position.clone()
           .add(dir.multiplyScalar(DIST))
           .addScaledVector(right, this.portrait ? 0 : -0.34)
-          .addScaledVector(up, this.portrait ? 0.46 : 0.10);
+          .addScaledVector(up, this.portrait ? 0.46 : 0.02);
         this.holdLight.position.copy(target).add(new THREE.Vector3(0, 0.45, 0));
         this.holdLight.intensity = lerp(this.holdLight.intensity, 2.6, 1 - Math.pow(0.01, dt));
         this.picked.position.lerp(target, 1 - Math.pow(0.0015, dt));
@@ -866,7 +891,7 @@ export class ShopScene {
           const box = new THREE.Box3().setFromObject(this.picked);
           const h = Math.max(box.max.y - box.min.y, 0.10);
           const frameH = 2 * DIST * Math.tan(THREE.MathUtils.degToRad(this.camera.fov) / 2);
-          this.picked.userData.holdScale = THREE.MathUtils.clamp((frameH * (this.portrait ? 0.22 : 0.36)) / h, 0.5, 2.6);
+          this.picked.userData.holdScale = THREE.MathUtils.clamp((frameH * (this.portrait ? 0.22 : 0.33)) / h, 0.5, 2.6);
         }
         const hs = this.picked.userData.holdScale;
         this.picked.scale.setScalar(lerp(this.picked.scale.x, hs, 1 - Math.pow(0.01, dt)));
