@@ -174,6 +174,7 @@ function startTill() {
   TILL.total = 0;
   TILL.orderId = null;
   TILL.running = true;
+  TILL.ready = false;
 
   $('#till').classList.remove('hidden');
   $('#hud').classList.add('till-open');
@@ -208,8 +209,7 @@ function startTill() {
   if (TILL.poller) clearInterval(TILL.poller);
   TILL.poller = setInterval(syncTill, 180);
 
-  setTimeout(() => {
-    scene.startCheckout(lines, (meta) => {
+  scene.startCheckout(lines, (meta) => {
       // light up the next pack in the list, as if it just went over the glass
       const rows = $$('#tillList .till-line:not(.scanned)');
       const row = rows[0];
@@ -238,12 +238,13 @@ function startTill() {
         ? `Items ${money(subtotal)} + Dhaka delivery ${money(delivery)}`
         : `Items ${money(subtotal)} · delivery free`;
       $('#payBox').classList.remove('hidden');
+      TILL.ready = true;
       refreshPayState();
     });
-  }, 1700);
 }
 
 function refreshPayState() {
+  if (!TILL.ready) { $('#payBtn').disabled = true; return; }
   const v = ($('#payField').value || '').replace(/\s/g, '');
   const spec = PAY_LABEL[TILL.method];
   const ok = TILL.method === 'card' ? v.replace(/\D/g, '').length >= 15 : v.length >= spec.len;
@@ -261,6 +262,8 @@ function setPayMethod(m) {
 }
 
 function payNow() {
+  if (!TILL.ready || TILL.running) return;
+  TILL.ready = false;
   const btn = $('#payBtn');
   btn.disabled = true;
   btn.textContent = 'Talking to ' + (TILL.method === 'card' ? 'the bank' : TILL.method.charAt(0).toUpperCase() + TILL.method.slice(1)) + '…';
