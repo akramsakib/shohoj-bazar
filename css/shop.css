@@ -539,3 +539,5 @@ input { font: inherit; }
 /* while the till is open the HUD gets out of the way */
 #hud.till-open .hud-right,
 #hud.till-open .hud-search { opacity: 0; pointer-events: none; transition: opacity .2s ease; }
+
+.pay-break { font-size: .74rem; color: #63756b; margin-top: -4px; }

@@ -208,8 +208,11 @@ function startTill() {
       // everything has been read — now the money
       TILL.running = false;
       $('#tillHint').textContent = 'All scanned. Sadia has bagged it for you.';
-      const { total } = tillAmount();
+      const { subtotal, delivery, total } = tillAmount();
       $('#payAmount').textContent = money(total);
+      $('#payBreak').textContent = delivery
+        ? `Items ${money(subtotal)} + Dhaka delivery ${money(delivery)}`
+        : `Items ${money(subtotal)} · delivery free`;
       $('#payBox').classList.remove('hidden');
       refreshPayState();
     });
