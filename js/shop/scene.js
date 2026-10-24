@@ -8,7 +8,8 @@ import { GTAOPass } from '../../vendor/jsm/postprocessing/GTAOPass.js';
 import { UnrealBloomPass } from '../../vendor/jsm/postprocessing/UnrealBloomPass.js';
 import { ShaderPass } from '../../vendor/jsm/postprocessing/ShaderPass.js';
 import { OutputPass } from '../../vendor/jsm/postprocessing/OutputPass.js';
-import { buildProduct, priceTag, shelfTalker, ensureBackTexture, glowTexture } from './assets.js';
+import { buildProduct, priceTag, shelfTalker, ensureBackTexture, glowTexture, pbrSet } from './assets.js';
+import { HDRLoader } from '../../vendor/jsm/loaders/HDRLoader.js';
 
 const ease = (t) => (t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2);
 const lerp = (a, b, t) => a + (b - a) * t;
@@ -299,8 +300,17 @@ export class ShopScene {
     pmrem.compileEquirectangularShader();
     this.scene.environment = pmrem.fromEquirectangular(tex).texture;
     this.scene.environmentIntensity = 0.55;
-    pmrem.dispose();
     tex.dispose();
+
+    // swap in a real captured HDR once it downloads: true dynamic range in reflections
+    new HDRLoader().load('../../hdri/gear_store_1k.hdr', (hdr) => {
+      hdr.mapping = THREE.EquirectangularReflectionMapping;
+      this.scene.environment = pmrem.fromEquirectangular(hdr).texture;
+      this.scene.environmentIntensity = 0.62;
+      if (this.bloom) this.bloom.needsUpdate = true;
+      hdr.dispose();
+      pmrem.dispose();
+    }, undefined, () => { pmrem.dispose(); });
   }
 
   /* -------------------------------------------------------------- street */
@@ -475,8 +485,9 @@ export class ShopScene {
     const floor = new THREE.Mesh(
       new THREE.PlaneGeometry(9.5, 46),
       new THREE.MeshPhysicalMaterial({
-        map: floorTexture(), roughness: 0.42, metalness: 0.06,
-        clearcoat: 0.5, clearcoatRoughness: 0.32, color: '#efe9dc', envMapIntensity: 0.9,
+        ...pbrSet('terrazzo_tiles', [2.2, 10]),
+        roughness: 1.0, metalness: 0.02,
+        clearcoat: 0.55, clearcoatRoughness: 0.30, color: '#ffffff', envMapIntensity: 0.8,
       })
     );
     floor.rotation.x = -Math.PI / 2;
@@ -758,7 +769,9 @@ export class ShopScene {
     /* ---- bulk display at the aisle mouth ---- */
     this.bulkGroups = [];
     if (dept.layout.bulkDisplay === 'sacks' && (dept.bulk || []).length) {
-      const woodMat = new THREE.MeshStandardMaterial({ color: '#6b4a2a', roughness: 0.95 });
+      const woodMat = new THREE.MeshStandardMaterial({
+        ...pbrSet('brown_planks_05', [1, 1]), color: '#c9a06f', roughness: 1.0, metalness: 0,
+      });
       const pallet = new THREE.Group();
       for (let i = 0; i < 5; i++) {
         const slat = new THREE.Mesh(new THREE.BoxGeometry(0.95, 0.022, 0.20), woodMat);

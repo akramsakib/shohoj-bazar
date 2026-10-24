@@ -7,6 +7,33 @@ import * as THREE from '../../vendor/three.module.js';
 const textureCache = new Map();
 const geoCache = new Map();
 
+/* ------------------------------------------------- real photographic PBR sets
+   CC0 scans from Poly Haven, served from /textures. Photographic albedo + normal +
+   roughness is the difference between "modelled" and "built". */
+const pbrCache = new Map();
+
+export function pbrSet(name, repeat = [1, 1]) {
+  const key = name + '@' + repeat.join('x');
+  if (pbrCache.has(key)) return pbrCache.get(key);
+  const loader = new THREE.TextureLoader();
+  const base = '../../textures/';
+  const load = (file, srgb) => {
+    const t = loader.load(base + file);
+    t.wrapS = t.wrapT = THREE.RepeatWrapping;
+    t.repeat.set(repeat[0], repeat[1]);
+    t.anisotropy = 8;
+    if (srgb) t.colorSpace = THREE.SRGBColorSpace;
+    return t;
+  };
+  const set = {
+    map: load(name + '_diff.jpg', true),
+    normalMap: load(name + '_nor_gl.jpg', false),
+    roughnessMap: load(name + '_rough.jpg', false),
+  };
+  pbrCache.set(key, set);
+  return set;
+}
+
 /* ---------------------------------------------------------------- helpers */
 function roundedRect(ctx, x, y, w, h, r) {
   ctx.beginPath();
