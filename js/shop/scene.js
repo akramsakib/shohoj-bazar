@@ -74,6 +74,12 @@ export class ShopScene {
     this.buildStreet();
     this.buildInterior();
     this.buildAisle(department);
+    this.buildTrolley();
+    this.yaw = 0;       // free look, horizontal
+    this.pitch = 0;     // free look, vertical
+    this.walkHold = 0;  // -1 backwards, +1 forwards, while a key is held
+    this.moveInput = { f: 0, s: 0 };   // joystick: forward, sideways
+    this.lateral = 0;                  // how far you have stepped across the aisle
     this.setCameraVantage('street', true);
     this.bindInput();
     this.animate();
@@ -628,6 +634,143 @@ export class ShopScene {
     return g ? g.userData.section : null;
   }
 
+  /* ------------------------------------------------------------- trolley */
+  buildTrolley() {
+    const g = new THREE.Group();
+    g.name = 'trolley';
+    // light aluminium, not mirror metal — the shop has no environment map to reflect
+    const chrome = new THREE.MeshStandardMaterial({ color: '#dfe3e6', roughness: 0.42, metalness: 0.25 });
+    const wire = new THREE.MeshStandardMaterial({ color: '#e6e9eb', roughness: 0.5, metalness: 0.18 });
+
+    const W = 0.52, L = 0.78, RIM = 1.05, FLOOR = 0.50;
+
+    // basket floor
+    const floor = new THREE.Mesh(new THREE.BoxGeometry(W, 0.02, L), wire);
+    floor.position.set(0, FLOOR, -0.06);
+    g.add(floor);
+
+    // four basket walls, low enough to see over
+    const front = new THREE.Mesh(new THREE.BoxGeometry(W, RIM - FLOOR, 0.02), wire);
+    front.position.set(0, (RIM + FLOOR) / 2, -0.06 - L / 2);
+    g.add(front);
+    [-1, 1].forEach((sx) => {
+      const side = new THREE.Mesh(new THREE.BoxGeometry(0.02, RIM - FLOOR, L), wire);
+      side.position.set(sx * W / 2, (RIM + FLOOR) / 2, -0.06);
+      g.add(side);
+    });
+    const backWall = new THREE.Mesh(new THREE.BoxGeometry(W, (RIM - FLOOR) * 0.55, 0.02), wire);
+    backWall.position.set(0, FLOOR + (RIM - FLOOR) * 0.28, -0.06 + L / 2);
+    g.add(backWall);
+
+    // rim rail
+    const railTop = (w, d, x, z) => {
+      const r = new THREE.Mesh(new THREE.BoxGeometry(w, 0.025, d), chrome);
+      r.position.set(x, RIM, z);
+      g.add(r);
+    };
+    railTop(W + 0.02, 0.025, 0, -0.06 - L / 2);
+    railTop(W + 0.02, 0.025, 0, -0.06 + L / 2);
+    railTop(0.025, L, -W / 2, -0.06);
+    railTop(0.025, L, W / 2, -0.06);
+
+    // push handle, angled back toward the shopper
+    const bar = new THREE.Mesh(new THREE.BoxGeometry(W + 0.06, 0.032, 0.032), chrome);
+    bar.position.set(0, 1.16, 0.44);
+    g.add(bar);
+    [-1, 1].forEach((sx) => {
+      const post = new THREE.Mesh(new THREE.BoxGeometry(0.03, 0.24, 0.03), chrome);
+      post.position.set(sx * (W / 2 - 0.01), 1.03, 0.44);
+      post.rotation.x = 0.18;
+      g.add(post);
+    });
+
+    // wheels
+    [[-1, -1], [1, -1], [-1, 1], [1, 1]].forEach(([sx, sz]) => {
+      const wheel = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.045, 0.045, 0.03, 12),
+        new THREE.MeshStandardMaterial({ color: '#2b2f31', roughness: 0.8 })
+      );
+      wheel.rotation.z = Math.PI / 2;
+      wheel.position.set(sx * (W / 2 - 0.04), 0.045, -0.06 + sz * (L / 2 - 0.05));
+      g.add(wheel);
+    });
+
+    // red grip on the handle + a shop plate on the basket front
+    const grip = new THREE.Mesh(
+      new THREE.BoxGeometry(W * 0.60, 0.030, 0.036),
+      new THREE.MeshStandardMaterial({ color: '#0d6138', roughness: 0.55 })
+    );
+    grip.position.set(0, 1.16, 0.444);
+    g.add(grip);
+
+    const plate = new THREE.Mesh(
+      new THREE.PlaneGeometry(0.30, 0.075),
+      new THREE.MeshBasicMaterial({ map: signTexture('SHOHOJ', 'সহজ', '#0d6138') })
+    );
+    plate.position.set(0, 0.86, -0.06 - L / 2 - 0.012);
+    plate.rotation.y = Math.PI;
+    g.add(plate);
+
+    // items dropped into the basket live here
+    this.basket = new THREE.Group();
+    g.add(this.basket);
+
+    g.visible = false;
+    this.trolley = g;
+    this.scene.add(g);
+  }
+
+  takeTrolley() {
+    if (!this.trolley) return;
+    this.trolley.visible = true;
+    this.updateTrolley(1);
+  }
+
+  /* Put a pack in the basket — this is the shopper's own trolley, so it is visible. */
+  putInTrolley(product) {
+    if (!this.trolley) return;
+    this.takeTrolley();
+    const n = this.basket.children.length;
+    const mesh = buildProduct({ ...product, shape: product.shape }, { shadow: false });
+    const box = new THREE.Box3().setFromObject(mesh);
+    const h = Math.max(box.max.y - box.min.y, 0.1);
+    mesh.scale.setScalar(THREE.MathUtils.clamp(0.44 / h, 0.35, 1.3));
+    const cols = 3;
+    const col = n % cols, row = Math.floor(n / cols) % 2, layer = Math.floor(n / (cols * 2));
+    // packed into the back of the basket, tops poking above the rim like a real trolley
+    mesh.position.set(-0.15 + col * 0.15, 0.60 + layer * 0.30, -0.42 + row * 0.20);
+    mesh.rotation.y = Math.PI + (n % 2 ? 0.26 : -0.20);
+    mesh.rotation.z = (n % 3 === 0 ? 0.10 : -0.05);
+    this.basket.add(mesh);
+  }
+
+  updateTrolley(dt) {
+    if (!this.trolley || !this.trolley.visible) return;
+    const cam = this.camera;
+    const fwd = new THREE.Vector3();
+    cam.getWorldDirection(fwd);
+    fwd.y = 0;
+    if (fwd.lengthSq() < 1e-4) fwd.set(0, 0, -1);
+    fwd.normalize();
+    // the trolley follows your body: it swings after the head, it does not snap to it
+    if (this.trolleyHeading === undefined) this.trolleyHeading = Math.atan2(fwd.x, fwd.z);
+    let want = Math.atan2(fwd.x, fwd.z);
+    let d = want - this.trolleyHeading;
+    while (d > Math.PI) d -= Math.PI * 2;
+    while (d < -Math.PI) d += Math.PI * 2;
+    this.trolleyHeading += THREE.MathUtils.clamp(d, -1.6 * dt, 1.6 * dt);
+    const body = new THREE.Vector3(Math.sin(this.trolleyHeading), 0, Math.cos(this.trolleyHeading));
+    const target = cam.position.clone().addScaledVector(body, this.portrait ? 1.15 : 0.74);
+    target.y = 0;
+    const k = 1 - Math.pow(0.0001, Math.min(dt, 0.05));
+    this.trolley.position.lerp(target, k);
+    // face the same way the shopper faces
+    this.trolley.rotation.y = this.trolleyHeading + Math.PI;
+    // a little rolling bounce while walking
+    const moving = Math.abs(this.aisleZ - this.walkTarget) > 0.02;
+    this.trolley.position.y = moving ? Math.sin(performance.now() * 0.012) * 0.006 : 0;
+  }
+
   /* -------------------------------------------------------------- camera */
   vantages() {
     return {
@@ -660,6 +803,8 @@ export class ShopScene {
   }
 
   enterShop() {
+    this.recentreLook();
+    this.lateral = 0;
     // doors part, camera glides through into the hall
     this.setCameraVantage('hall');
     const start = performance.now();
@@ -777,12 +922,12 @@ export class ShopScene {
   bindInput() {
     const canvas = this.canvas;
     let down = null;
-    let lastY = 0;
     let dragging = false;
+    let px = 0, py = 0;
 
     canvas.addEventListener('pointerdown', (e) => {
       down = { x: e.clientX, y: e.clientY, t: performance.now() };
-      lastY = e.clientY;
+      px = e.clientX; py = e.clientY;
       dragging = false;
       canvas.setPointerCapture(e.pointerId);
     });
@@ -793,16 +938,16 @@ export class ShopScene {
       const dy = e.clientY - down.y;
       if (Math.abs(dx) + Math.abs(dy) > 6) dragging = true;
 
+      // a pack in your hand: drag turns the pack
       if (this.picked && dragging) {
-        this.rotatePicked(e.movementX || dx * 0.2, e.movementY || dy * 0.2);
-        down.x = e.clientX; down.y = e.clientY;
+        this.rotatePicked(e.clientX - px, e.clientY - py);
+        px = e.clientX; py = e.clientY;
         return;
       }
-      if (this.mode === 'aisle' && dragging) {
-        const step = (lastY - e.clientY) * 0.012;
-        this.walk(step);
-        lastY = e.clientY;
-        this.emit('walk', this.walkTarget);
+      // otherwise: drag looks around, exactly like turning your head
+      if (dragging) {
+        this.look((e.clientX - px) * 0.0038, (e.clientY - py) * 0.0030);
+        px = e.clientX; py = e.clientY;
       }
     });
 
@@ -823,16 +968,39 @@ export class ShopScene {
       if (this.picked) return;
       if (this.mode !== 'aisle') return;
       e.preventDefault();
-      this.walk(e.deltaY * 0.0055);
+      this.walk(-e.deltaY * 0.0055);
       this.emit('walk', this.walkTarget);
     }, { passive: false });
 
     window.addEventListener('keydown', (e) => {
-      if (this.mode !== 'aisle' || this.picked) return;
-      if (e.key === 'ArrowUp' || e.key === 'w') { this.walk(-0.35); this.emit('walk', this.walkTarget); }
-      if (e.key === 'ArrowDown' || e.key === 's') { this.walk(0.35); this.emit('walk', this.walkTarget); }
+      const k = e.key.toLowerCase();
+      if (k === 'arrowleft' || k === 'a') this.look(-0.05, 0);
+      else if (k === 'arrowright' || k === 'd') this.look(0.05, 0);
+      else if (k === 'arrowup' || k === 'w') this.walkHold = 1;
+      else if (k === 'arrowdown' || k === 's') this.walkHold = -1;
+      else return;
+      e.preventDefault();
+    });
+    window.addEventListener('keyup', (e) => {
+      const k = e.key.toLowerCase();
+      if (['arrowup', 'w', 'arrowdown', 's'].includes(k)) this.walkHold = 0;
     });
   }
+
+  /* Turn the head. Pitch is clamped like a real neck. */
+  look(dYaw, dPitch) {
+    this.yaw -= dYaw;
+    this.pitch = THREE.MathUtils.clamp(this.pitch - dPitch, -0.66, 0.56);
+  }
+
+  recentreLook() { this.yaw = 0; this.pitch = 0; }
+
+  /* Joystick: f = forward/back (-1..1), s = sideways (-1..1). */
+  setMove(f, s) { this.moveInput.f = f; this.moveInput.s = s; }
+
+  /* Held walk from the keyboard. dir: 1 forward, -1 back. */
+  startWalk(dir) { this.walkHold = dir; }
+  stopWalk() { this.walkHold = 0; }
 
   /* ---------------------------------------------------------------- loop */
   animate() {
@@ -852,16 +1020,34 @@ export class ShopScene {
         if (t >= 1) this.tween = null;
       }
 
+      // held walking (keyboard) + joystick (forward/back, step sideways)
+      if (this.mode === 'aisle' && !this.picked) {
+        const f = this.walkHold || this.moveInput.f;
+        if (f) {
+          this.walk(f * dt * 2.6);
+          this.emit('walk', this.walkTarget);
+        }
+        if (this.moveInput.s) {
+          this.lateral = THREE.MathUtils.clamp(this.lateral + this.moveInput.s * dt * 1.7, -0.9, 0.9);
+        }
+      }
+
       // walking
       if (this.mode === 'aisle' && !this.picked) {
         this.aisleZ = lerp(this.aisleZ, this.walkTarget, 1 - Math.pow(0.001, dt));
         const portrait = this.portrait;
-        const targetX = portrait ? -1.15 : 0;
+        const targetX = (portrait ? -1.15 : 0) + this.lateral;
         this.camera.position.x = lerp(this.camera.position.x, targetX, 1 - Math.pow(0.01, dt));
         this.camera.position.z = this.aisleZ;
-        this.camera.position.y = 1.52 + Math.sin(performance.now() * 0.0018) * 0.006;
-        if (portrait) this.lookTarget.set(-1.85, 1.16, this.aisleZ - 5.4);
-        else this.lookTarget.set(0, 1.28, this.aisleZ - 8);
+        // breathing at rest, a gentle stride bob while walking — a head, not a dolly
+        const walking = Math.abs(this.aisleZ - this.walkTarget) > 0.03 || this.moveInput.f;
+        const t = performance.now();
+        const bob = walking
+          ? Math.sin(t * 0.0088) * 0.014 + Math.sin(t * 0.0176) * 0.004
+          : Math.sin(t * 0.0018) * 0.006;
+        this.camera.position.y = 1.52 + bob;
+        if (portrait) this.lookTarget.set(-1.85, 0.92, this.aisleZ - 5.4);
+        else this.lookTarget.set(0, 1.02, this.aisleZ - 8);
       }
 
       // ease light intensities (dim while a product is in hand)
@@ -912,6 +1098,12 @@ export class ShopScene {
       }
 
       this.camera.lookAt(this.lookTarget);
+      // free look layers on top of the shot the camera is framed for
+      this.camera.rotateY(this.yaw);
+      this.camera.rotateX(this.pitch);
+
+      this.updateTrolley(dt);
+
       this.renderer.render(this.scene, this.camera);
     };
     tick();

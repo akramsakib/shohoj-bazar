@@ -52,6 +52,7 @@ function addToTrolley(product, qty = 1) {
   if (line) line.qty = Math.min(line.qty + qty, 30);
   else state.trolley.push({ id: product.id, qty });
   saveTrolley();
+  if (scene && scene.putInTrolley) scene.putInTrolley(product);   // lands in the basket you are pushing
   toast(`${product.name} added to your trolley`);
 }
 function setQty(id, qty) {
@@ -251,6 +252,8 @@ function scriptedReply() {
 /* ---------------------------------------------------------------- inspect */
 function openInspect(product) {
   if (!product) { closeInspect(); return; }
+  // putting one pack back before grabbing the next one
+  if (state.inspecting && state.inspecting.id !== product.id) scene.release();
   state.inspecting = product;
   const el = $('#inspect');
   el.classList.remove('hidden');
@@ -383,6 +386,11 @@ function boot() {
     return;
   }
 
+  scene.takeTrolley();   // you walk in pushing a trolley, like a real shop
+  $('#stick').classList.remove('hidden');
+  $('#lookHint').classList.remove('hidden');
+  setTimeout(() => toast('Your trolley is ready. Push the stick to walk, drag anywhere to look around.'), 2200);
+
   scene.on('pick', (product) => {
     if (product) openInspect(product);
     else if (state.inspecting) closeInspect();
@@ -408,6 +416,38 @@ function boot() {
   setTimeout(() => $('#loader').classList.add('done'), 900);
 
   /* entry */
+  /* walk stick: push it and you walk, let go and you stop */
+  const stickBase = $('#stickBase'), knob = $('#stickKnob');
+  if (stickBase && knob) {
+    let active = false;
+    const RADIUS = 34;
+    const move = (e) => {
+      if (!active) return;
+      const r = stickBase.getBoundingClientRect();
+      let dx = e.clientX - (r.left + r.width / 2);
+      let dy = e.clientY - (r.top + r.height / 2);
+      const len = Math.hypot(dx, dy) || 1;
+      if (len > RADIUS) { dx = (dx / len) * RADIUS; dy = (dy / len) * RADIUS; }
+      knob.style.transform = `translate(${dx}px, ${dy}px)`;
+      const f = -dy / RADIUS;       // push up = walk forward
+      const s = dx / RADIUS;        // push sideways = step across the aisle
+      scene.setMove(Math.abs(f) < 0.16 ? 0 : f, Math.abs(s) < 0.22 ? 0 : s);
+      e.preventDefault();
+    };
+    const release = () => {
+      active = false;
+      knob.style.transform = 'translate(0,0)';
+      scene.setMove(0, 0);
+    };
+    stickBase.addEventListener('pointerdown', (e) => {
+      active = true; stickBase.setPointerCapture(e.pointerId); move(e);
+    });
+    stickBase.addEventListener('pointermove', move);
+    stickBase.addEventListener('pointerup', release);
+    stickBase.addEventListener('pointercancel', release);
+    stickBase.addEventListener('lostpointercapture', release);
+  }
+
   $('#enterBtn').onclick = () => {
     $('#entry').classList.add('leaving');
     setTimeout(() => {

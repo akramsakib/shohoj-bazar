@@ -400,3 +400,48 @@ input { font: inherit; }
   .inspect-cook { font-size: .74rem; padding: 6px 9px; margin-bottom: 8px; }
   .inspect-hint { display: none; }
 }
+
+/* ---------- walking + looking ---------- */
+#stick {
+  position: fixed; left: 18px; bottom: 86px; z-index: 46;
+  display: flex; flex-direction: column; align-items: center; gap: 7px;
+  user-select: none; touch-action: none;
+}
+#stickBase {
+  width: 116px; height: 116px; border-radius: 50%;
+  background: radial-gradient(circle at 50% 45%, rgba(255,255,255,.92), rgba(240,244,240,.72));
+  border: 1px solid rgba(255,255,255,.75);
+  box-shadow: 0 12px 30px rgba(0,0,0,.30), inset 0 0 0 8px rgba(13,97,56,.08);
+  display: grid; place-items: center; position: relative;
+  backdrop-filter: blur(10px);
+}
+#stickKnob {
+  width: 48px; height: 48px; border-radius: 50%;
+  background: var(--green-700); border: 2px solid #fff;
+  box-shadow: 0 6px 14px rgba(0,0,0,.3);
+  display: block; transition: transform .05s linear;
+}
+#stick .stick-legend {
+  font-size: .62rem; font-weight: 800; letter-spacing: .12em; text-transform: uppercase;
+  color: #fff; background: rgba(20,26,20,.5); padding: 3px 9px; border-radius: 999px;
+  backdrop-filter: blur(8px);
+}
+#lookHint {
+  position: fixed; left: 50%; transform: translateX(-50%); bottom: 210px; z-index: 46;
+  font-size: .74rem; color: #fff; background: rgba(20,26,20,.55);
+  padding: 6px 12px; border-radius: 999px; backdrop-filter: blur(8px);
+  animation: fadeOut 5s forwards;
+}
+@keyframes fadeOut { 0%,70% { opacity: 1 } 100% { opacity: 0; visibility: hidden } }
+@media (min-width: 861px) {
+  #stick { bottom: 92px; left: 22px; }
+  #stickBase { width: 132px; height: 132px; }
+  #stickKnob { width: 54px; height: 54px; }
+  #lookHint { bottom: 232px; }
+}
+@media (max-width: 860px) {
+  #stick { bottom: 78px; left: 12px; }
+  #stickBase { width: 104px; height: 104px; }
+  #stickKnob { width: 44px; height: 44px; }
+  #lookHint { bottom: 196px; font-size: .7rem; }
+}
