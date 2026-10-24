@@ -16,7 +16,7 @@ export function pbrSet(name, repeat = [1, 1]) {
   const key = name + '@' + repeat.join('x');
   if (pbrCache.has(key)) return pbrCache.get(key);
   const loader = new THREE.TextureLoader();
-  const base = '../../textures/';
+  const base = 'textures/';   // relative to the document, so it works under /repo/ on Pages
   const load = (file, srgb) => {
     const t = loader.load(base + file);
     t.wrapS = t.wrapT = THREE.RepeatWrapping;
@@ -26,9 +26,9 @@ export function pbrSet(name, repeat = [1, 1]) {
     return t;
   };
   const set = {
-    map: load(name + '_diff.jpg', true),
-    normalMap: load(name + '_nor_gl.jpg', false),
-    roughnessMap: load(name + '_rough.jpg', false),
+    map: load(name + '_diff.webp', true),
+    normalMap: load(name + '_nor_gl.webp', false),
+    roughnessMap: load(name + '_rough.webp', false),
   };
   pbrCache.set(key, set);
   return set;

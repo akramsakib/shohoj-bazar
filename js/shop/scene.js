@@ -9,7 +9,6 @@ import { UnrealBloomPass } from '../../vendor/jsm/postprocessing/UnrealBloomPass
 import { ShaderPass } from '../../vendor/jsm/postprocessing/ShaderPass.js';
 import { OutputPass } from '../../vendor/jsm/postprocessing/OutputPass.js';
 import { buildProduct, priceTag, shelfTalker, ensureBackTexture, glowTexture, pbrSet } from './assets.js';
-import { HDRLoader } from '../../vendor/jsm/loaders/HDRLoader.js';
 
 const ease = (t) => (t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2);
 const lerp = (a, b, t) => a + (b - a) * t;
@@ -302,12 +301,12 @@ export class ShopScene {
     this.scene.environmentIntensity = 0.55;
     tex.dispose();
 
-    // swap in a real captured HDR once it downloads: true dynamic range in reflections
-    new HDRLoader().load('../../hdri/gear_store_1k.hdr', (hdr) => {
+    // swap in a captured real-world probe once the 46 KB version downloads
+    new THREE.TextureLoader().load('hdri/gear_store_1024.jpg', (hdr) => {
       hdr.mapping = THREE.EquirectangularReflectionMapping;
+      hdr.colorSpace = THREE.SRGBColorSpace;
       this.scene.environment = pmrem.fromEquirectangular(hdr).texture;
-      this.scene.environmentIntensity = 0.62;
-      if (this.bloom) this.bloom.needsUpdate = true;
+      this.scene.environmentIntensity = 0.9;   // LDR probe needs a lift
       hdr.dispose();
       pmrem.dispose();
     }, undefined, () => { pmrem.dispose(); });
