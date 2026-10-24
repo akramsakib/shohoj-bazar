@@ -54,7 +54,8 @@ fi
 
 # ---------- 1. create the repo if needed ----------
 say "Repository $GH_OWNER/$GH_REPO"
-if gh GET "/repos/$GH_OWNER/$GH_REPO" | json ".id" | grep -q .; then
+EXISTING=$(gh GET "/repos/$GH_OWNER/$GH_REPO" | json ".full_name")
+if [ -n "$EXISTING" ]; then
   echo "   already exists"
 else
   CREATED=$(gh POST "/user/repos" "{\"name\":\"$GH_REPO\",\"description\":\"Shohoj Bazar — virtual super shop for Bangladesh\",\"private\":false,\"has_issues\":true,\"has_wiki\":false}")
