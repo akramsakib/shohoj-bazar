@@ -59,10 +59,21 @@ function parseKg(weight) {
 /* Real-world footprint per package shape, derived from the pack weight. */
 export function footprint(product) {
   if (product.bulkDims) return product.bulkDims;   // floor sacks use real 25 kg proportions
+  /* Real pack proportions, measured off the reference packs rather than guessed:
+     a 5 kg branded rice bag is about 30 x 40 cm and 14 cm thick, a 25 kg sack is
+     nearer 46 x 62, a 1 kg dal pouch is 17 x 24 and thin. Getting these right is
+     what makes a shelf look stocked to scale instead of like a row of boxes. */
   const kg = parseKg(product.weight);
   switch (product.shape) {
-    case 'sack':   return { w: 0.26 + Math.min(kg, 10) * 0.012, h: 0.30 + Math.min(kg, 10) * 0.010, d: 0.19, bulge: 0.075 };
-    case 'pouch':  return { w: 0.19 + Math.min(kg, 2) * 0.02, h: 0.27, d: 0.10, bulge: 0.035 };
+    case 'sack': {
+      if (kg >= 20) return { w: 0.46, h: 0.62, d: 0.17, bulge: 0.075 };
+      const t = Math.min(kg, 10) / 10;
+      return { w: 0.28 + t * 0.05, h: 0.38 + t * 0.06, d: 0.12 + t * 0.03, bulge: 0.07 };
+    }
+    case 'pouch': {
+      const t = Math.min(kg, 2) / 2;
+      return { w: 0.165 + t * 0.05, h: 0.235 + t * 0.055, d: 0.075 + t * 0.02, bulge: 0.035 };
+    }
     case 'box':    return { w: 0.17, h: 0.23, d: 0.055, bulge: 0 };
     case 'bottle': return { r: 0.042, h: 0.29, d: 0.084, bulge: 0 };
     case 'jar':    return { r: 0.055, h: 0.12, d: 0.12, bulge: 0 };
@@ -154,6 +165,21 @@ export function drawLabel(product, ctx, W, H) {
   const bsz = fitFont(ctx, brandText, bw * 0.82, H * 0.078, 800);
   ctx.font = `800 ${bsz}px Inter, Arial, sans-serif`;
   ctx.fillText(brandText, W / 2, by + bh * 0.52);
+
+  // a small grade ribbon (PREMIUM / AROMATIC / STANDARD), the way real packs rank
+  // their own range — it is what makes a shelf of one brand read as a product line
+  if (product.grade) {
+    const gw = W * 0.40, gh = H * 0.048;
+    const gx = W / 2 - gw / 2, gy = by + bh + H * 0.012;
+    ctx.fillStyle = 'rgba(255,255,255,.94)';
+    roundedRect(ctx, gx, gy, gw, gh, gh * 0.5);
+    ctx.fill();
+    ctx.fillStyle = a;
+    ctx.font = `700 ${gh * 0.62}px Inter, Arial, sans-serif`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(String(product.grade).toUpperCase(), W / 2, gy + gh * 0.54);
+  }
 
   // product name, English then Bangla
   ctx.textBaseline = 'middle';

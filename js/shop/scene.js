@@ -17,6 +17,10 @@ import { bakeAndMerge } from './optimize.js';
 import { buildAtlas, buildPackField } from './packfield.js';
 import { ShopPhysics } from './physics.js';
 import { buildLighting } from './lighting.js';
+import { HDRLoader } from '../../vendor/jsm/loaders/HDRLoader.js';
+import { makeProp, hasProp } from './props.js';
+import { stockBay } from './stocking.js';
+import { buildWeighCounter } from './weigh.js';
 import { initShopSound, setWalkSpeed, beep, announce } from './sound.js';
 
 const ease = (t) => (t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2);
@@ -103,6 +107,8 @@ export class ShopScene {
     // a shop announcement every so often, like the real thing
     setInterval(() => { if (Math.random() < 0.45) announce(); }, 42000);
 
+    this.department = department;
+    this.dept = department;      // the entrance displays are dressed with real stock
     this.initRenderer();
     this.initScene();
     this.buildStreet();
@@ -160,6 +166,9 @@ export class ShopScene {
   initScene() {
     this.scene = new THREE.Scene();
     this.scene.background = new THREE.Color('#171a17');
+    // a whisper of haze: distant shelving softens, near shelving stays crisp.
+    // Without it every surface in a 35 m run is equally sharp.
+    this.scene.fog = new THREE.FogExp2('#e2d7c2', 0.013);
     this.scene.fog = new THREE.FogExp2('#e8dcc4', 0.014);
 
     // key / fill / rim rig — see js/shop/lighting.js
@@ -228,8 +237,8 @@ export class ShopScene {
         tDiffuse: { value: null },
         uTime: { value: 0 },
         uCA: { value: 0.0022 },
-        uContrast: { value: 0.16 },
-        uVignette: { value: 0.16 },
+        uContrast: { value: 0.22 },
+        uVignette: { value: 0.22 },
         uGrain: { value: 0.018 },
         uLift: { value: new THREE.Vector3(0.0, 0.0, 0.0) },
       },
@@ -341,14 +350,26 @@ export class ShopScene {
     tex.dispose();
 
     // swap in a captured real-world probe once the 46 KB version downloads
-    new THREE.TextureLoader().load('hdri/gear_store_1024.jpg', (hdr) => {
+    /* Real captured environment: a 1k HDR probe of an industrial interior
+       (Poly Haven, CC0). Real lamps at real intensities, real bounce, so metal has
+       something to reflect and packaging has something to pick up. */
+    new HDRLoader().load('hdri/warehouse_1k.hdr', (hdr) => {
       hdr.mapping = THREE.EquirectangularReflectionMapping;
-      hdr.colorSpace = THREE.SRGBColorSpace;
       this.scene.environment = pmrem.fromEquirectangular(hdr).texture;
-      this.scene.environmentIntensity = 0.9;   // LDR probe needs a lift
+      this.scene.environmentIntensity = 1.15;
+      this.hdrLoaded = true;
       hdr.dispose();
       pmrem.dispose();
-    }, undefined, () => { pmrem.dispose(); });
+    }, undefined, () => {
+      new THREE.TextureLoader().load('hdri/gear_store_1024.jpg', (jpg) => {
+        jpg.mapping = THREE.EquirectangularReflectionMapping;
+        jpg.colorSpace = THREE.SRGBColorSpace;
+        this.scene.environment = pmrem.fromEquirectangular(jpg).texture;
+        this.scene.environmentIntensity = 0.9;
+        jpg.dispose();
+        pmrem.dispose();
+      }, undefined, () => pmrem.dispose());
+    });
   }
 
   /* -------------------------------------------------------------- street */
@@ -619,6 +640,31 @@ export class ShopScene {
       );
       top.position.y = 1.28;
       unit.add(top);
+      // a bare cream box reads as a placeholder, so the display is dressed with
+      // this department's own packs, on the deck and on a shelf lip above it
+      [[1.31, 0.08], [1.74, -0.02]].forEach(([yy, zz], row) => {
+        for (let k = 0; k < 4; k++) {
+          const pick = this.department.products[(row * 9 + k * 5 + i * 3) % this.department.products.length];
+          const pack = buildProduct(pick, { shadow: true });
+          pack.scale.setScalar(0.62);
+          pack.position.set(gx - 0.45 + k * 0.30, yy, gz + zz);
+          pack.rotation.y = Math.PI + (row - 0.5) * 0.06;
+          pack.userData.dressOnly = true;
+          unit.add(pack);
+        }
+      });
+      const lip = new THREE.Mesh(
+        new THREE.BoxGeometry(1.36, 0.035, 0.5),
+        new THREE.MeshStandardMaterial({ color: '#e7dfcd', roughness: 0.7 })
+      );
+      lip.position.set(gx, 1.70, gz - 0.02);
+      unit.add(lip);
+      const face = new THREE.Mesh(
+        new THREE.PlaneGeometry(1.1, 0.5),
+        new THREE.MeshStandardMaterial({ map: signTexture('OFFER', 'অফার · আজকের দাম', '#c1121f'), roughness: 0.8 })
+      );
+      face.position.set(gx, 0.72, gz + 0.32);
+      unit.add(face);
       unit.position.set(gx, 0, gz);
       g.add(unit);
     });
@@ -768,7 +814,7 @@ export class ShopScene {
     });
     const ceil = new THREE.Mesh(
       new THREE.BoxGeometry(4.9, 0.1, totalLen + 1.2),
-      new THREE.MeshStandardMaterial({ color: '#f1ebdc', roughness: 0.92 })
+      new THREE.MeshStandardMaterial({ color: '#f7f4ec', roughness: 0.9 })
     );
     ceil.position.set(0, 3.5, AISLE_START_Z - totalLen / 2 + 0.3);
     aisle.add(ceil);
@@ -810,9 +856,16 @@ export class ShopScene {
     const housingMat = new THREE.MeshStandardMaterial({ color: '#d9dbd4', roughness: 0.5, metalness: 0.4 });
     for (let i = 0; i * 2.6 < totalLen; i++) {
       const z = AISLE_START_Z - 1.3 - i * 2.6;
-      const housing = new THREE.Mesh(new THREE.BoxGeometry(0.30, 0.10, 1.9), housingMat);
-      housing.position.set(0, 3.30, z);
-      aisle.add(housing);
+      if (hasProp('batten')) {
+        // a scanned double-tube batten: real reflector geometry and end caps
+        const batten = makeProp('batten', { width: 1.9, rotationY: Math.PI / 2, castShadow: false });
+        batten.position.set(0, 3.12, z);
+        aisle.add(batten);
+      } else {
+        const housing = new THREE.Mesh(new THREE.BoxGeometry(0.30, 0.10, 1.9), housingMat);
+        housing.position.set(0, 3.30, z);
+        aisle.add(housing);
+      }
       const tube = new THREE.Mesh(new THREE.PlaneGeometry(0.20, 1.78), tubeMat);
       tube.rotation.x = Math.PI / 2;
       tube.position.set(0, 3.24, z);
@@ -839,52 +892,25 @@ export class ShopScene {
       }
     }
 
-    /* ---- overstock cartons on the gondola tops ---- */
-    const cartonTex = (() => {
-      const c = document.createElement('canvas');
-      c.width = 256; c.height = 192;
-      const g = c.getContext('2d');
-      g.fillStyle = '#c39a63';
-      g.fillRect(0, 0, 256, 192);
-      g.fillStyle = 'rgba(255,255,255,.14)';
-      for (let i = 0; i < 26; i++) g.fillRect(0, i * 8, 256, 1);
-      g.fillStyle = '#7a5230';
-      g.fillRect(0, 66, 256, 6);
-      g.fillRect(0, 120, 256, 6);
-      g.fillStyle = '#2b2118';
-      g.fillRect(26, 84, 88, 26);
-      g.fillStyle = '#f4ead8';
-      g.fillRect(122, 84, 108, 18);
-      g.fillStyle = '#2b2118';
-      g.fillRect(20, 138, 210, 8);
-      g.fillRect(20, 152, 150, 6);
-      const t = new THREE.CanvasTexture(c);
-      t.colorSpace = THREE.SRGBColorSpace;
-      t.anisotropy = 4;
-      return t;
-    })();
-    const cartonMat = new THREE.MeshStandardMaterial({ map: cartonTex, roughness: 0.92, color: '#fff' });
-    const cartonBlank = new THREE.MeshStandardMaterial({ color: '#b78f5c', roughness: 0.94 });
+    /* ---- overstock on the gondola tops: scanned cartons, not boxes I typed ---- */
     const gondolaTop = BASE_Y + LEVELS * LEVEL_H + 0.06;
     (this.bayGroups || []).forEach((group) => {
       const { side, bay } = group.userData;
       const bayCentre = AISLE_START_Z - BAY_W / 2 - bay * BAY_W;
       const count = 3 + Math.round(Math.abs(Math.sin(bay * 3.7 + side)) * 3);
       for (let i = 0; i < count; i++) {
-        const w = 0.34 + ((i * 37) % 5) * 0.04;
-        const h = 0.26 + ((i * 53) % 4) * 0.05;
-        const d = 0.30 + ((i * 29) % 4) * 0.045;
-        const box = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), i % 3 === 0 ? cartonBlank : cartonMat);
+        const w = 0.36 + ((i * 37) % 5) * 0.035;
         const col = i % 2;
-        const stackH = i > 3 ? h * 0.94 : 0;
-        box.position.set(
-          side * (SHELF_X - 0.34 - col * 0.13),
-          gondolaTop + h / 2 + stackH,
-          bayCentre + (i - count / 2) * 0.58 + Math.sin(i * 2.1) * 0.05
+        const carton = makeProp('carton', {
+          width: w,
+          rotationY: Math.sin(bay * 5 + i * 1.7) * 0.12 + (side > 0 ? 0 : Math.PI),
+        });
+        carton.position.set(
+          side * (SHELF_X - 0.34 - col * 0.16),
+          gondolaTop + (i > 3 ? 0.26 : 0),
+          bayCentre + (i - count / 2) * 0.56 + Math.sin(i * 2.1) * 0.05
         );
-        box.rotation.y = Math.sin(bay * 5 + i * 1.7) * 0.09;
-        box.castShadow = true;
-        aisle.add(box);
+        aisle.add(carton);
       }
       // a low header board capping the gondola, like the colour-coded run ends
       const cap = new THREE.Mesh(
@@ -895,63 +921,67 @@ export class ShopScene {
       aisle.add(cap);
     });
 
-    /* ---- stock the shelves ---- */
-    const facings = this.portrait ? dept.layout.facings.mobile : dept.layout.facings.desktop;
+    /* ---- stock the shelves (planogram, see js/shop/stocking.js) ---- */
     const bySection = {};
     dept.products.forEach((p) => { (bySection[p.section] = bySection[p.section] || []).push(p); });
-    // deterministic shuffle per bay+level so a shopper sees variety, not wallpaper
-    const seeded = (n) => {
-      let x = Math.sin(n * 12.9898) * 43758.5453;
-      return x - Math.floor(x);
-    };
 
     const talkerMap = {};
     (dept.talkers || []).forEach((t) => { talkerMap[t.productId] = t.text; });
 
     (this.bayGroups || []).forEach((group) => {
       const { side, bay, section, BAY_W: BW, LEVELS: LV, LEVEL_H: LH, BASE_Y: BY } = group.userData;
-      const pool = (bySection[section ? section.id : dept.sections?.[0]?.id] || dept.products);
-      const STEP = BW / facings;
-      let n = 0;
+      const pool = bySection[section ? section.id : dept.sections?.[0]?.id] || dept.products;
 
-      for (let level = 0; level < LV; level++) {
-        const order = pool
-          .map((p, idx) => ({ p, k: seeded(bay * 31 + level * 7 + idx) }))
-          .sort((a, b) => a.k - b.k)
-          .map((o) => o.p);
-        for (let f = 0; f < facings; f++) {
-          const product = order[f % order.length];
-          n++;
-          const z = -BW / 2 + STEP / 2 + f * STEP;
+      const plan = stockBay({
+        products: pool,
+        bayWidth: BW,
+        levels: LV,
+        levelH: LH,
+        baseY: BY,
+        seed: bay * 17 + (side > 0 ? 5 : 1) + 1,
+        footprint: packFootprint,
+        maxDepth: this.tier === 'low' ? 1 : 2,
+        endGap: 0.12,
+        startGap: 0.08,
+      });
 
-          const jitter = (k) => (Math.sin((product.id.charCodeAt(1) || 1) * 12.9 + k * 78.2) * 43758.5453) % 1;
-          const j1 = jitter(level * 10 + f), j2 = jitter(level * 10 + f + 0.5);
-          const foot = packFootprint(product);
-          slots.push({
-            product,
-            position: new THREE.Vector3(side * SHELF_X + side * 0.02, BY + level * LH + 0.045 + foot.h / 2,
-              group.position.z + z),
-            rotation: new THREE.Euler(0, (side < 0 ? Math.PI / 2 : -Math.PI / 2) + (j1 - 0.5) * 0.10, (j2 - 0.5) * 0.05),
-            size: foot,
-            shadow: level === 0,
-          });
+      const labelled = new Map();
+      plan.forEach((slot) => {
+        const { product, level, row, z, y, size } = slot;
+        // local +x is into the shelf; the aisle is at -side * x
+        const localX = -side * (0.255 - size.d / 2 - slot.back) + side * slot.shoved;
+        slots.push({
+          product,
+          position: new THREE.Vector3(group.position.x + localX, y, group.position.z + z),
+          rotation: new THREE.Euler(
+            0,
+            (side < 0 ? Math.PI / 2 : -Math.PI / 2) + slot.lean,
+            slot.shoved * 1.4
+          ),
+          size,
+          shadow: level === 0 && row === 0,
+        });
 
-          if (level <= 1) {
+        if (row === 0 && level <= 2) {
+          const key = `${product.id}:${level}:${Math.round(z * 4)}`;
+          if (!labelled.has(key)) {
+            labelled.set(key, true);
             const tag = priceTag(product);
-            tag.position.set(side * SHELF_X - side * 0.30, BY + level * LH + 0.075, group.position.z + z);
+            tag.position.set(group.position.x - side * 0.285, y - size.h / 2 + 0.021, group.position.z + z);
             tag.rotation.y = side < 0 ? Math.PI / 2 : -Math.PI / 2;
             aisle.add(tag);
           }
-
-          const talkerText = talkerMap[product.id];
-          if (talkerText && level === 1 && f % 3 === 0) {
-            const t = shelfTalker(product, talkerText);
-            t.position.set(side * SHELF_X - side * 0.36, BY + level * LH + 0.19, group.position.z + z);
-            t.rotation.y = side < 0 ? Math.PI / 2 : -Math.PI / 2;
-            aisle.add(t);
-          }
         }
-      }
+
+        const talkerText = talkerMap[product.id];
+        if (talkerText && level === 1 && row === 0 && !talkerMap[`_used${product.id}`]) {
+          talkerMap[`_used${product.id}`] = true;
+          const t = shelfTalker(product, talkerText);
+          t.position.set(side * (SHELF_X - 0.34), BY + level * LH + 0.20, group.position.z + z);
+          t.rotation.y = side < 0 ? Math.PI / 2 : -Math.PI / 2;
+          aisle.add(t);
+        }
+      });
     });
 
     /* ---- bulk display at the aisle mouth ---- */
@@ -1015,6 +1045,10 @@ export class ShopScene {
 
     /* ---- end cap at the far end ---- */
     if (dept.layout.endcap === 'weigh-counter') {
+      this.weighCounter = buildWeighCounter(AISLE_END_Z + 1.35, { accent: dept.accent || '#0d6138' });
+      aisle.add(this.weighCounter);
+    }
+    if (false) {
       const counter = new THREE.Group();
       const body = new THREE.Mesh(
         new THREE.BoxGeometry(3.4, 0.95, 0.9),
@@ -1163,31 +1197,38 @@ export class ShopScene {
 
     /* ---- people: a shop with nobody in it is a showroom, not a super shop ---- */
     this.people = [];
+    // Everyone is placed and clamped INSIDE the run. The old table had three
+    // shoppers starting past the end of the shelving, which stranded them in the
+    // checkout hall leaning mid-stride.
+    const runLo = AISLE_END_Z + 2.4;
+    const runHi = AISLE_START_Z - 2.0;
     const cast = [
-      { x: -1.48, z: AISLE_START_Z - 8.5, speed: 0.46, dir: -1, opts: { shirt: '#3d6b78', tunic: '#3d6b78', trousers: '#2b3038', scarf: '#a63a44', height: 1.62, build: 'slim' } },
-      { x: 1.52, z: AISLE_START_Z - 16.0, speed: 0.62, dir: 1, opts: { shirt: '#d9d3c4', trousers: '#3a3f46', height: 1.71 } },
-      { x: -1.42, z: AISLE_START_Z - 27.0, speed: 0.42, dir: 1, opts: { shirt: '#5d7050', tunic: '#5d7050', trousers: '#22262b', height: 1.66, build: 'slim' } },
-      { x: 1.46, z: AISLE_START_Z - 35.0, speed: 0.55, dir: -1, opts: { shirt: '#8a5a2b', trousers: '#2b3038', height: 1.75 } },
-      { x: -1.50, z: AISLE_START_Z - 45.0, speed: 0.50, dir: 1, opts: { shirt: '#6f5a78', tunic: '#6f5a78', trousers: '#33383f', scarf: '#d8c390', height: 1.58, build: 'slim' } },
+      { x: -1.42, z: -13.2, speed: 0.46, dir: -1, opts: { variant: 'casual_female', shirt: '#3d6b78', trousers: '#2b3038', height: 1.62 } },
+      { x: 1.26, z: -17.6, speed: 0.62, dir: 1, opts: { variant: 'casual_male', shirt: '#d9d3c4', trousers: '#3a3f46', height: 1.71 } },
+      { x: -1.40, z: -21.4, speed: 0.42, dir: 1, opts: { variant: 'kimono', height: 1.66 } },
+      { x: 1.24, z: -25.2, speed: 0.55, dir: -1, opts: { variant: 'casual_male', shirt: '#8a5a2b', trousers: '#2b3038', height: 1.75 } },
+      { x: -1.46, z: -26.4, speed: 0.50, dir: 1, opts: { variant: 'scarf', tunic: '#6f5a78', trousers: '#33383f', scarf: '#d8c390', height: 1.58 } },
     ];
     cast.forEach((c) => {
       const person = buildPerson(c.opts);
-      person.position.set(c.x, 0, c.z);
+      const z0 = Math.min(runHi, Math.max(runLo, c.z));
+      person.position.set(c.x, 0, z0);
       person.rotation.y = c.dir > 0 ? 0 : Math.PI;
       aisle.add(person);
       this.people.push({
-        group: person, x: c.x, z: c.z, speed: c.speed, dir: c.dir, person,
-        // each shopper works their own stretch of the aisle instead of the whole run
-        lo: Math.max(AISLE_END_Z + 2.0, c.z - 4.5),
-        hi: Math.min(AISLE_START_Z - 1.5, c.z + 4.5),
+        group: person, x: c.x, z: z0, speed: c.speed, dir: c.dir, person,
+        lo: Math.max(runLo, z0 - 3.2),
+        hi: Math.min(runHi, z0 + 3.2),
       });
     });
     // one of ours on the floor, standing at the weigh counter with an apron on
-    const staffer = buildPerson({ shirt: '#f4f1e8', trousers: '#22262b', apron: '#0d6138', height: 1.64, build: 'slim' });
-    staffer.position.set(-0.55, 0, AISLE_END_Z + 2.1);
-    staffer.rotation.y = Math.PI * 0.94;
+    // the attendant belongs BEHIND his own counter, facing the shopper — he used
+    // to stand in front of it, in the customer's way
+    const staffer = buildPerson({ shirt: '#f4f1e8', trousers: '#22262b', apron: '#0d6138', height: 1.64 });
+    staffer.position.set(-1.05, 0, AISLE_END_Z - 0.05);
+    staffer.rotation.y = Math.PI;
     aisle.add(staffer);
-    this.people.push({ group: staffer, x: -0.55, z: AISLE_END_Z + 2.1, speed: 0, dir: 1, person: staffer });
+    this.people.push({ group: staffer, x: -1.05, z: AISLE_END_Z - 0.05, speed: 0, dir: 1, person: staffer });
 
     /* ---- checkout hall at the end of the run ---- */
     const CZ = AISLE_END_Z - 4.4;
@@ -1202,7 +1243,7 @@ export class ShopScene {
     aisle.add(hallCeil);
     const hallWall = new THREE.Mesh(
       new THREE.BoxGeometry(5.06, 3.5, 0.12),
-      new THREE.MeshStandardMaterial({ color: '#d3dbd2', roughness: 0.95 })
+      new THREE.MeshStandardMaterial({ color: '#f2f4f0', roughness: 0.95 })
     );
     hallWall.position.set(0, 1.75, CZ - 5.6);
     aisle.add(hallWall);
@@ -1210,7 +1251,7 @@ export class ShopScene {
     [-2.5, 2.5].forEach((hx) => {
       const sideWall = new THREE.Mesh(
         new THREE.BoxGeometry(0.1, 3.5, 9.6),
-        new THREE.MeshStandardMaterial({ color: '#e4ddcb', roughness: 0.95 })
+        new THREE.MeshStandardMaterial({ color: '#f1f2ec', roughness: 0.95 })
       );
       sideWall.position.set(hx, 1.75, CZ - 1.0);
       aisle.add(sideWall);
@@ -1292,14 +1333,26 @@ export class ShopScene {
       lamp.userData.baseIntensity = 1.7;
       aisle.add(lamp);
     });
-    for (let i = 0; i < 2; i++) {
-      const housing = new THREE.Mesh(new THREE.BoxGeometry(2.4, 0.09, 0.30), new THREE.MeshStandardMaterial({ color: '#d9dbd4', roughness: 0.5, metalness: 0.4 }));
-      housing.position.set(0, 3.24, CZ - 1.5 - i * 2.4);
-      aisle.add(housing);
-      const tube = new THREE.Mesh(new THREE.PlaneGeometry(2.2, 0.20), new THREE.MeshBasicMaterial({ color: '#fffdf4' }));
+    const hallHalo = new THREE.MeshBasicMaterial({
+      map: glowTexture(), transparent: true, opacity: 0.45, depthWrite: false,
+      blending: THREE.AdditiveBlending, toneMapped: false,
+    });
+    for (let i = 0; i < 3; i++) {
+      const hz = CZ + 0.8 - i * 2.6;
+      if (hasProp('batten')) {
+        const batten = makeProp('batten', { width: 2.3, rotationY: Math.PI / 2, castShadow: false });
+        batten.position.set(0, 3.20, hz);
+        aisle.add(batten);
+      }
+      const tube = new THREE.Mesh(new THREE.PlaneGeometry(2.3, 0.22), new THREE.MeshBasicMaterial({ color: '#fffdf4', toneMapped: false }));
       tube.rotation.x = Math.PI / 2;
-      tube.position.set(0, 3.19, CZ - 1.5 - i * 2.4);
+      tube.position.set(0, 3.13, hz);
       aisle.add(tube);
+      const halo = new THREE.Mesh(new THREE.PlaneGeometry(4.2, 1.8), hallHalo);
+      halo.rotation.x = Math.PI / 2;
+      halo.position.set(0, 3.10, hz);
+      halo.renderOrder = 2;
+      aisle.add(halo);
     }
 
     /* ---- one instanced field for every pack in the department ---- */
@@ -1327,11 +1380,38 @@ export class ShopScene {
     P.addBox({ x: 2.55, y: 1.75, z: 0.1 }, { x: 2.55, y: 1.75, z: CZ - 1.0 });
     P.addBox({ x: 2.55, y: 1.75, z: 0.1 }, { x: 0, y: 1.75, z: CZ - 5.55 });
     // weigh counter at the end of the run, and the promo island at the mouth
-    P.addBox({ x: 2.1, y: 0.8, z: 0.35 }, { x: 0, y: 0.8, z: AISLE_END_Z + 0.55 });
+    P.addBox({ x: 1.86, y: 0.5, z: 0.5 }, { x: 0, y: 0.5, z: AISLE_END_Z + 1.35 });
     P.addBox({ x: 0.62, y: 0.06, z: 1.0 }, { x: 1.55, y: 0.06, z: AISLE_START_Z - 3.4 });
 
     this.checkout = buildCheckoutLane(CZ, 0);
     aisle.add(this.checkout.group);
+
+    /* ---- the queue ---- Two shoppers stood on the rail side of the lane, feet
+       pinned, facing the till, so nobody hovers behind the counter. */
+    this.queuePeople = [
+      { x: -1.18, z: CZ + 3.05, opts: { variant: 'casual_male', shirt: '#7a4b32', trousers: '#2b3038', height: 1.63 } },
+      { x: -1.04, z: CZ + 4.15, opts: { variant: 'casual_female', shirt: '#4a5f74', trousers: '#33383f', height: 1.70 } },
+    ].map((q, i) => {
+      const person = buildPerson(q.opts);
+      person.position.set(q.x, 0, q.z);
+      person.rotation.y = Math.PI * 0.94;
+      aisle.add(person);
+      return { person, x: q.x, z: q.z, phase: i * 2.3 };
+    });
+
+    /* ---- back-of-house props: a stock cage and a couple of 25 kg sacks ---- */
+    if (hasProp('cart')) {
+      const cart = makeProp('cart', { width: 1.15, rotationY: -Math.PI / 2 });
+      cart.position.set(2.42, 0, CZ - 3.9);
+      aisle.add(cart);
+    }
+    if (hasProp('bag')) {
+      [[-2.42, CZ - 3.55, 0.15, 0], [-2.30, CZ - 4.05, -0.4, 0.15]].forEach(([bx, bz, ry, by]) => {
+        const sack = makeProp('bag', { width: 0.62, rotationY: ry });
+        sack.position.set(bx, by, bz);
+        aisle.add(sack);
+      });
+    }
     this.checkoutQueue = [];
     this.checkoutTimer = 0;
 
@@ -1349,7 +1429,10 @@ export class ShopScene {
       console.warn('[optimise] skipped', e);
     }
     // the aisle runs toward -z, so walkMin is the far end and walkMax the mouth
-    this.walkMin = AISLE_END_Z + 2.6;
+    // You have to be able to stand IN FRONT of the weigh counter and of the last
+    // bay of shelving. The old clamp stopped the shopper 2.6 m short of the end,
+    // leaving the last 5 m of shelf and the whole loose-grain counter unreachable.
+    this.walkMin = AISLE_END_Z + 1.15;
     this.walkMax = AISLE_START_Z + 1.2;
     this.aisleZ = AISLE_START_Z;
     this.walkTarget = AISLE_START_Z;
@@ -1519,9 +1602,11 @@ export class ShopScene {
       model.traverse((o) => {
         if (!o.isMesh || !o.material) return;
         const m = o.material;
-        if (m.metalness !== undefined) { m.metalness = Math.min(m.metalness, 0.62); }
-        if (m.roughness !== undefined) { m.roughness = Math.max(m.roughness, 0.34); }
-        m.envMapIntensity = 0.55;
+        // with a captured HDR probe in the scene the wire can finally read as
+        // chrome instead of white spray paint
+        if (m.metalness !== undefined) m.metalness = Math.min(Math.max(m.metalness, 0.82), 0.95);
+        if (m.roughness !== undefined) m.roughness = Math.min(Math.max(m.roughness, 0.20), 0.34);
+        m.envMapIntensity = 1.35;
         m.needsUpdate = true;
       });
       this.trolley.add(model);
@@ -1615,7 +1700,7 @@ export class ShopScene {
     while (d < -Math.PI) d += Math.PI * 2;
     this.trolleyHeading += THREE.MathUtils.clamp(d, -1.6 * dt, 1.6 * dt);
     const body = new THREE.Vector3(Math.sin(this.trolleyHeading), 0, Math.cos(this.trolleyHeading));
-    const target = cam.position.clone().addScaledVector(body, this.portrait ? 1.45 : 1.72);
+    const target = cam.position.clone().addScaledVector(body, this.portrait ? 1.55 : 2.02);
     target.y = 0;
     this.physics.updateTrolley(target, dt);
     this.physics.syncTrolley();
@@ -1701,7 +1786,7 @@ export class ShopScene {
       street: { pos: new THREE.Vector3(0, 1.68, 15.4), look: new THREE.Vector3(0, 3.15, 5.2) },
       hall:   { pos: new THREE.Vector3(0, 1.6, 1.8),  look: new THREE.Vector3(0, 1.5, -9) },
       aisle:  { pos: new THREE.Vector3(0, 1.55, this.aisleZ), look: new THREE.Vector3(0, 1.3, this.aisleZ - 8) },
-      checkout: { pos: new THREE.Vector3(0.40, 1.66, (this.checkoutZ || -30) + 3.6), look: new THREE.Vector3(0.55, 1.02, (this.checkoutZ || -30) + 0.1) },
+      checkout: { pos: new THREE.Vector3(-0.62, 1.60, (this.checkoutZ || -30) + 2.15), look: new THREE.Vector3(1.05, 1.05, (this.checkoutZ || -30) - 0.05) },
 
     };
   }
@@ -2058,7 +2143,7 @@ export class ShopScene {
         const bob = walking
           ? Math.sin(t * 0.0088) * 0.014 + Math.sin(t * 0.0176) * 0.004
           : Math.sin(t * 0.0018) * 0.006;
-        this.camera.position.y = 1.52 + bob;
+        this.camera.position.y = 1.62 + bob;
         if (portrait) this.lookTarget.set(-1.85, 0.92, this.aisleZ - 5.4);
         else this.lookTarget.set(0, 1.02, this.aisleZ - 8);
       }
@@ -2157,6 +2242,11 @@ export class ShopScene {
         });
       }
 
+      if (this.queuePeople) {
+        this.queuePeople.forEach((q) => {
+          if (q.person.userData.animate) q.person.userData.animate(now * 0.5 + q.phase, 0);
+        });
+      }
       // the cashier stands at the till: idle breathing, occasional glance
       if (this.checkout && this.checkout.cashier && this.checkout.cashier.userData.animate) {
         this.checkout.cashier.userData.animate(now * 0.001, 0);

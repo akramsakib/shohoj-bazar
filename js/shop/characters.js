@@ -13,7 +13,23 @@ import * as THREE from '../../vendor/three.module.js';
 import { GLTFLoader } from '../../vendor/jsm/loaders/GLTFLoader.js';
 import { clone as skeletonClone } from '../../vendor/jsm/utils/SkeletonUtils.js';
 
-const MODELS = { plain: 'models/human.glb', scarf: 'models/human_scarf.glb' };
+/* Two kinds of people live in the shop.
+
+   `plain` / `scarf` are the Blender figures from tools/make_human.py — authored
+   here, so they carry the hijab variant.
+
+   The rest are the CC0 Quaternius Universal Animated Character set: professionally
+   modelled and rigged, with hand-animated library clips. They are prepared for the
+   web by tools/prep_characters.mjs (clips trimmed, animation resampled, geometry
+   quantised: 1.24 MB -> ~270 KB each) and are ~3 m tall as authored, so each
+   carries its native height. */
+const MODELS = {
+  plain:         { url: 'models/human.glb',          native: 1.72 },
+  scarf:         { url: 'models/human_scarf.glb',    native: 1.72 },
+  casual_male:   { url: 'models/casual_male.glb',    native: 3.18 },
+  casual_female: { url: 'models/casual2_female.glb', native: 3.05 },
+  kimono:        { url: 'models/kimono_female.glb',  native: 3.05 },
+};
 
 const cache = {};          // variant -> { scene, animations }
 const loading = {};
@@ -23,7 +39,7 @@ export function preloadHuman(variant = 'plain') {
   if (loading[variant]) return loading[variant];
   loading[variant] = new Promise((resolve) => {
     new GLTFLoader().load(
-      MODELS[variant] || MODELS.plain,
+      (MODELS[variant] || MODELS.plain).url,
       (gltf) => {
         gltf.scene.traverse((o) => {
           if (!o.isMesh) return;
@@ -35,7 +51,10 @@ export function preloadHuman(variant = 'plain') {
             m.envMapIntensity = 0.75;
             if (m.name === 'Skin') { m.roughness = 0.58; m.metalness = 0; }
             if (m.name === 'Shirt') { m.roughness = 0.82; }
-            if (m.name === 'Trousers') { m.roughness = 0.9; }
+            if (m.name === 'Trousers' || m.name === 'Pants') { m.roughness = 0.9; }
+            if (m.name === 'Clothes') { m.roughness = 0.88; }
+            if (m.name === 'Face') { m.roughness = 0.5; }
+            if (m.name === 'Belt') { m.roughness = 0.6; }
             if (m.name === 'Shoes') { m.roughness = 0.4; m.metalness = 0.08; }
             if (m.name === 'Hair') { m.roughness = 0.55; }
           });
@@ -57,6 +76,7 @@ export function preloadHuman(variant = 'plain') {
 
 const SKIN = ['#d8a37a', '#c68d63', '#b57a4e', '#a26a42', '#e0b48e'];
 const HAIR = ['#141110', '#1f1917', '#2a1f18', '#0f0d0c'];
+export const BODIES = ['casual_male', 'casual_female', 'kimono', 'scarf', 'plain', 'casual_male'];
 
 /**
  * One shopper. Returns a group with the same API the shop already used:
@@ -71,6 +91,7 @@ export function makeCharacter(opts = {}) {
     shoes = '#22262b',
     apron = null,
     height = 1.72,
+    variant = null,        // which body to wear; defaults to the Blender figure
     seed = 0,
     scarf = null,          // hijab / dupatta colour
     tunic = null,          // truthy → long kameez; a colour string sets its colour
@@ -95,7 +116,11 @@ export function makeCharacter(opts = {}) {
         switch (m.name) {
           case 'Skin': c.color.set(skin); break;
           case 'Shirt': c.color.set(shirt); break;
-          case 'Trousers': c.color.set(trousers); break;
+          case 'Trousers':
+          case 'Pants': c.color.set(trousers); break;
+          case 'Clothes': c.color.set(tunic && typeof tunic === 'string' ? tunic : shirt); break;
+          case 'Belt': c.color.set('#20242a'); break;
+          case 'Face': break;                    // eyes and brows: leave as authored
           case 'Hair': c.color.set(hair); break;
           case 'Shoes': c.color.set(shoes); break;
           case 'Scarf': if (scarf) c.color.set(scarf); break;
@@ -107,18 +132,21 @@ export function makeCharacter(opts = {}) {
     });
   };
 
-  preloadHuman(scarf ? 'scarf' : 'plain').then((asset) => {
+  const body = variant && MODELS[variant] ? variant : (scarf ? 'scarf' : 'plain');
+  const nativeHeight = (MODELS[body] || MODELS.plain).native;
+
+  preloadHuman(body).then((asset) => {
     if (!asset) return;
     const model = skeletonClone(asset.scene);
     paint(model);
-    model.scale.setScalar(height / 1.72);
+    model.scale.setScalar(height / nativeHeight);
     group.add(model);
     group.userData.pending = false;
     group.userData.model = model;
 
     // a staff apron hangs off the chest bone, so it moves with the body
     if (apron) {
-      const chest = model.getObjectByName('chest');
+      const chest = model.getObjectByName('chest') || model.getObjectByName('Torso');
       const apronMat = new THREE.MeshStandardMaterial({ color: apron, roughness: 0.9 });
       const bib = new THREE.Mesh(new THREE.BoxGeometry(0.30, 0.40, 0.035), apronMat);
       const skirt = new THREE.Mesh(new THREE.BoxGeometry(0.34, 0.34, 0.05), apronMat);
@@ -140,7 +168,7 @@ export function makeCharacter(opts = {}) {
 
     // a kameez: a long skirt over the hips, so not everyone wears a tucked shirt
     if (tunic) {
-      const hipsBone = model.getObjectByName('hips');
+      const hipsBone = model.getObjectByName('hips') || model.getObjectByName('Hips');
       // open-ended cylinder: without DoubleSide you see straight through the
       // garment from behind and it reads as a fin
       const tm = new THREE.MeshStandardMaterial({
@@ -157,7 +185,7 @@ export function makeCharacter(opts = {}) {
       asset.animations.forEach((clip) => {
         const action = mixer.clipAction(clip);
         const name = clip.name.toLowerCase();
-        if (name.includes('walk')) {
+        if (name === 'walk' || (name.includes('walk') && !name.includes('carry'))) {
           walkAction = action;
           action.play();
           action.setEffectiveWeight(0);

@@ -6,6 +6,7 @@
    ---------------------------------------------------------------------- */
 import * as THREE from '../../vendor/three.module.js';
 import { buildPerson } from './people.js';
+import { GLTFLoader } from '../../vendor/jsm/loaders/GLTFLoader.js';
 
 function canvasPlane(w, h, draw) {
   const c = document.createElement('canvas');
@@ -125,15 +126,33 @@ export function buildCheckoutLane(z, x = 0) {
     g.add(leg);
   });
 
+  /* Bags: a modelled poly carrier (models/bag.glb, tools/make_bag.py) instead of
+     two grey boxes. A plain cylinder stands in until the mesh arrives, so the lane
+     is never empty mid-load. */
   const bags = new THREE.Group();
-  for (let i = 0; i < 2; i++) {
-    const bag = new THREE.Mesh(
-      new THREE.BoxGeometry(0.30, 0.36, 0.22),
-      new THREE.MeshStandardMaterial({ color: '#e8e4d8', roughness: 0.95, transparent: true, opacity: 0.92 })
-    );
-    bag.position.set(1.85 + i * 0.34, 0.93, 0.02);
-    bags.add(bag);
-  }
+  const bagMat = new THREE.MeshStandardMaterial({
+    color: '#cfe0d2', roughness: 0.30, metalness: 0.0, side: THREE.DoubleSide,
+    transparent: true, opacity: 0.82, envMapIntensity: 1.3, depthWrite: false,
+  });
+  const stand = new THREE.Mesh(new THREE.CylinderGeometry(0.13, 0.11, 0.34, 12), bagMat);
+  stand.position.set(1.85, 0.93, 0.02);
+  bags.add(stand);
+  new GLTFLoader().load('models/bag.glb', (gltf) => {
+    const proto = gltf.scene;
+    proto.traverse((o) => {
+      if (!o.isMesh) return;
+      o.castShadow = true;
+      o.material = bagMat;
+    });
+    bags.clear();
+    for (let i = 0; i < 2; i++) {
+      const bag = proto.clone(true);
+      bag.scale.set(1.06, 0.94, 1.06);
+      bag.position.set(1.80 + i * 0.34, 0.752, 0.02 + (i % 2) * 0.03);
+      bag.rotation.set(0, (i - 0.5) * 0.5, (i - 0.5) * 0.10);
+      bags.add(bag);
+    }
+  }, undefined, () => {});
   g.add(bags);
 
   /* ---- the cashier, at the till side ---- */

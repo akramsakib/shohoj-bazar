@@ -3,6 +3,8 @@
 import { DEPARTMENT_INDEX, STAFF, money, ORDER_CONFIG } from './data.js';
 import { DEPARTMENTS, openDepartment, ALL_PRODUCTS, findProduct, sectionOf } from './departments/index.js';
 import { ShopScene } from './scene.js';
+import { preloadProps } from './props.js';
+import { warmPeople } from './people.js';
 
 const DEPT = openDepartment();          // the built, walkable department
 const PRODUCTS = ALL_PRODUCTS;          // every product in the shop (search/trolley)
@@ -548,7 +550,7 @@ function wireTill() {
   setPayMethod('bkash');
 }
 
-function boot() {
+async function boot() {
   applyLang();
   wireTill();
   renderMap();
@@ -558,6 +560,15 @@ function boot() {
   $('#entryStaff').textContent = STAFF.filter((s) => s.online).map((s) => s.name).join(', ');
   const ed = $('#entryDept');
   if (ed) ed.textContent = `Now open: Aisle 1 — ${DEPT.name} (${DEPT.nameBn}) · ${DEPT.products.length} products`;
+
+  // Load the real assets BEFORE the interior is built: the shelving, the ceiling
+  // fittings and the overstock are scanned models, and the crowd is shared GLBs,
+  // so the shop has to be assembled with them already in memory.
+  try {
+    await Promise.all([preloadProps(), warmPeople()]);
+  } catch (e) {
+    console.warn('asset preload failed', e);
+  }
 
   try {
     scene = new ShopScene($('#shop'), DEPT);
