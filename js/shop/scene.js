@@ -16,6 +16,7 @@ import { GLTFLoader } from '../../vendor/jsm/loaders/GLTFLoader.js';
 import { bakeAndMerge } from './optimize.js';
 import { buildAtlas, buildPackField } from './packfield.js';
 import { ShopPhysics } from './physics.js';
+import { buildLighting } from './lighting.js';
 import { initShopSound, setWalkSpeed, beep, announce } from './sound.js';
 
 const ease = (t) => (t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2);
@@ -161,25 +162,11 @@ export class ShopScene {
     this.scene.background = new THREE.Color('#171a17');
     this.scene.fog = new THREE.FogExp2('#e8dcc4', 0.014);
 
-    this.scene.add(new THREE.HemisphereLight(0xfff2dd, 0x6f6a5c, 0.22));
-
-    // key light with shadows; its shadow camera follows the shopper each frame
-    const key = new THREE.DirectionalLight(0xfff2dd, 1.15);
-    key.position.set(2.4, 7.5, -6);
-    key.castShadow = true;
-    key.shadow.mapSize.set(1024, 1024);
-    key.shadow.camera.left = -6;
-    key.shadow.camera.right = 6;
-    key.shadow.camera.top = 6;
-    key.shadow.camera.bottom = -6;
-    key.shadow.camera.near = 0.5;
-    key.shadow.camera.far = 24;
-    key.shadow.bias = -0.0012;
-    key.shadow.normalBias = 0.02;
-    key.shadow.radius = 2.5;
-    this.keyLight = key;
-    this.scene.add(key);
-    this.scene.add(key.target);
+    // key / fill / rim rig — see js/shop/lighting.js
+    this.lightRig = buildLighting(this.scene, this.renderer, {
+      preset: new URLSearchParams(location.search).get('time') || 'afternoon',
+    });
+    this.keyLight = this.lightRig.key;
 
     // image-based lighting from a painted room: gives plastic packs a real sheen
     this.applyEnvironment();
@@ -240,30 +227,58 @@ export class ShopScene {
       uniforms: {
         tDiffuse: { value: null },
         uTime: { value: 0 },
+        uCA: { value: 0.0022 },
+        uContrast: { value: 0.16 },
         uVignette: { value: 0.16 },
         uGrain: { value: 0.018 },
         uLift: { value: new THREE.Vector3(0.0, 0.0, 0.0) },
       },
       vertexShader: `varying vec2 vUv; void main(){ vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0); }`,
       fragmentShader: `
-        uniform sampler2D tDiffuse; uniform float uTime, uVignette, uGrain; uniform vec3 uLift;
+        uniform sampler2D tDiffuse;
+        uniform float uTime, uVignette, uGrain, uCA, uContrast;
+        uniform vec3 uLift;
         varying vec2 vUv;
+
         float hash(vec2 p){ return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+
+        // filmic-ish S-curve: lifts the midtones apart without crushing highlights
+        vec3 filmic(vec3 c, float k){
+          vec3 x = clamp(c, 0.0, 1.0);
+          vec3 s = x * x * (3.0 - 2.0 * x);          // smoothstep
+          return mix(x, s, k);
+        }
+
         void main(){
-          vec4 c = texture2D(tDiffuse, vUv);
-          // warm highlight / cool shadow split, like a graded photograph
-          vec3 col = c.rgb + uLift;
-          col = mix(col, col * vec3(1.02, 1.004, 0.985), smoothstep(0.55, 1.0, dot(col, vec3(0.33))));
-          col = mix(col, col * vec3(0.96, 0.985, 1.02), 1.0 - smoothstep(0.0, 0.45, dot(col, vec3(0.33))));
-          // vignette
-          float d = distance(vUv, vec2(0.5));
-          col *= 1.0 - uVignette * smoothstep(0.28, 0.92, d);
-          // fine grain so flat walls do not band
-          float g = hash(vUv * vec2(1920.0, 1080.0) + uTime) - 0.5;
-          col += g * uGrain;
-          gl_FragColor = vec4(col, c.a);
+          // a touch of chromatic aberration at the edges — the cheapest way to
+          // make a frame read as a lens rather than a screenshot
+          vec2 d = vUv - 0.5;
+          float r2 = dot(d, d);
+          vec2 off = d * r2 * uCA;
+          vec3 col;
+          col.r = texture2D(tDiffuse, vUv + off).r;
+          col.g = texture2D(tDiffuse, vUv).g;
+          col.b = texture2D(tDiffuse, vUv - off).b;
+
+          col += uLift;
+          col = filmic(col, uContrast);
+
+          // split tone: warm highlights, cool shadows
+          float luma = dot(col, vec3(0.299, 0.587, 0.114));
+          col = mix(col, col * vec3(1.035, 1.008, 0.975), smoothstep(0.5, 1.0, luma));
+          col = mix(col, col * vec3(0.955, 0.982, 1.030), 1.0 - smoothstep(0.0, 0.42, luma));
+
+          // vignette, stronger in the corners as a real lens does
+          float v = smoothstep(0.30, 0.95, length(d) * 1.28);
+          col *= 1.0 - uVignette * v;
+
+          // fine grain: breaks up banding on the big flat walls
+          float g = hash(vUv * vec2(1920.0, 1080.0) + fract(uTime));
+          col += (g - 0.5) * uGrain;
+
+          gl_FragColor = vec4(col, 1.0);
         }`,
-    };
+      };
     this.gradePass = new ShaderPass(GradeShader);
     this.composer.addPass(this.gradePass);
 
@@ -508,9 +523,11 @@ export class ShopScene {
     const floor = new THREE.Mesh(
       new THREE.PlaneGeometry(9.5, 46),
       new THREE.MeshPhysicalMaterial({
-        ...pbrSet('terrazzo_tiles', [8.4, 40]),
-        roughness: 0.74, metalness: 0.0,
-        clearcoat: 0.42, clearcoatRoughness: 0.24, color: '#ffffff', envMapIntensity: 0.85,
+        ...pbrSet('as_tiles', [14, 66]),
+        // big-format ceramic floor tiles: the grout lines give the eye scale, and a
+        // little clearcoat catches the ceiling lamps the way a real polished floor does
+        roughness: 0.62, metalness: 0.0,
+        clearcoat: 0.34, clearcoatRoughness: 0.22, color: '#f2efe9', envMapIntensity: 0.9,
       })
     );
     floor.rotation.x = -Math.PI / 2;
@@ -785,7 +802,11 @@ export class ShopScene {
     main.position.set(0, 3.30, AISLE_START_Z - totalLen / 2 + 0.3);
     aisle.add(main);
     // hanging linear fixtures: what actually lights a hypermarket aisle
-    const tubeMat = new THREE.MeshBasicMaterial({ color: '#fffdf4' });
+    // A tube has to be brighter than paper-white to bloom: on a normalised
+    // renderer, #fff is 1.0 and the bloom threshold sits above it.
+    const tubeMat = new THREE.MeshBasicMaterial({ color: '#fff8e2' });
+    tubeMat.color.multiplyScalar(2.6);
+    tubeMat.toneMapped = false;
     const housingMat = new THREE.MeshStandardMaterial({ color: '#d9dbd4', roughness: 0.5, metalness: 0.4 });
     for (let i = 0; i * 2.6 < totalLen; i++) {
       const z = AISLE_START_Z - 1.3 - i * 2.6;
@@ -796,6 +817,15 @@ export class ShopScene {
       tube.rotation.x = Math.PI / 2;
       tube.position.set(0, 3.24, z);
       aisle.add(tube);
+      // reflector: a shallow trough above the tube, which is what a real batten is
+      const reflect = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.17, 0.17, 1.9, 12, 1, true, 0, Math.PI),
+        new THREE.MeshStandardMaterial({ color: '#eef0ea', roughness: 0.35, metalness: 0.5, side: THREE.DoubleSide })
+      );
+      reflect.rotation.z = Math.PI;
+      reflect.rotation.y = Math.PI / 2;
+      reflect.position.set(0, 3.27, z);
+      aisle.add(reflect);
       [-1, 1].forEach((sx) => {
         const wire = new THREE.Mesh(new THREE.CylinderGeometry(0.008, 0.008, 0.16, 4), pipeMat);
         wire.position.set(sx * 0.12, 3.42, z);
@@ -2077,19 +2107,20 @@ export class ShopScene {
         }
       }
 
-      // shadow camera rides with the shopper, but only re-renders when it has moved
-      if (this.keyLight) {
+      // Shadow map: it used to refresh only when the CAMERA moved, which meant six
+      // walking shoppers cast shadows that were frozen where they started. We
+      // refresh every third frame instead — a person's shadow that lags 50 ms is
+      // invisible, a shadow that never moves is not.
+      if (this.lightRig) {
         const cam = this.camera.position;
         const last = this.shadowAnchor;
-        if (!last || Math.abs(cam.z - last.z) > 1.2 || Math.abs(cam.x - last.x) > 0.6) {
-          const k = this.keyLight;
-          k.position.set(cam.x + 2.4, 7.5, cam.z - 4.5);
-          k.target.position.set(cam.x, 0.6, cam.z - 3.5);
-          k.target.updateMatrixWorld();
-          k.shadow.needsUpdate = true;
-          this.renderer.shadowMap.needsUpdate = true;
+        const moved = !last || Math.abs(cam.z - last.z) > 1.2 || Math.abs(cam.x - last.x) > 0.6;
+        this.shadowFrame = ((this.shadowFrame || 0) + 1) % 3;
+        if (moved) {
+          this.lightRig.update(cam, this.mode);
           this.shadowAnchor = { x: cam.x, z: cam.z };
         }
+        if (moved || this.shadowFrame === 0) this.renderer.shadowMap.needsUpdate = true;
       }
 
       this.camera.lookAt(this.lookTarget);
@@ -2126,6 +2157,10 @@ export class ShopScene {
         });
       }
 
+      // the cashier stands at the till: idle breathing, occasional glance
+      if (this.checkout && this.checkout.cashier && this.checkout.cashier.userData.animate) {
+        this.checkout.cashier.userData.animate(now * 0.001, 0);
+      }
       if (this.gradePass) this.gradePass.uniforms.uTime.value = now * 0.001;
       if (this.composer) this.composer.render();
       else this.renderer.render(this.scene, this.camera);
